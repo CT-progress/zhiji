@@ -1,6 +1,13 @@
 from types import SimpleNamespace
 
-from zhiji.models import ContentBundle, ContentType, Metadata, Platform
+from zhiji.models import (
+    AppSettings,
+    ContentBundle,
+    ContentType,
+    Metadata,
+    Platform,
+    TranscriptSegment,
+)
 from zhiji.platforms.bilibili import BilibiliAdapter, _pick_subtitle
 from zhiji.platforms.bilibili_cookies import load_profile, prune_cookie, save_profile
 from zhiji.platforms.douyin import DouyinAdapter
@@ -147,3 +154,21 @@ def test_douyin_parse_url():
     ref = DouyinAdapter().parse_url("https://www.douyin.com/video/7123456789012345678")
     assert ref.platform == Platform.DOUYIN
     assert ref.content_id.startswith("712")
+
+
+def test_douyin_transcribe_uses_global_settings(monkeypatch, tmp_path):
+    adapter = DouyinAdapter()
+    captured: dict = {}
+
+    def fake_transcribe(path, settings):
+        captured["path"] = path
+        captured["settings"] = settings
+        return [TranscriptSegment(start=0.0, end=1.0, text="你好")]
+
+    monkeypatch.setattr("zhiji.transcription.engine.transcribe_file", fake_transcribe)
+    settings = AppSettings(whisper_model="base", whisper_device="cpu")
+
+    segments = adapter._transcribe_audio(tmp_path / "a.mp3", settings)
+
+    assert segments[0].text == "你好"
+    assert captured["settings"].whisper_model == "base"

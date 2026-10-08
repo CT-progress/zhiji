@@ -263,14 +263,32 @@ def check_env() -> None:
 
 
 @app.command("web")
-def web(port: int = 8000, host: str = "127.0.0.1") -> None:
-    """启动本地 Web 配置页。"""
+def web(
+    port: int = 8000,
+    host: str = "127.0.0.1",
+    token: str | None = typer.Option(None, help="非本机绑定时必须提供的访问令牌"),
+) -> None:
+    """启动本地 Web 配置页。
+
+    绑定到非本机地址（如 0.0.0.0）会暴露 API Key / Cookie 管理接口，
+    因此必须同时提供 --token，访问时需带上 ?token=。
+    """
     import uvicorn
 
     from zhiji.web.app import create_app
 
-    console.print(f"打开 http://{host}:{port}")
-    uvicorn.run(create_app(_manager()), host=host, port=port)
+    is_local = host in {"127.0.0.1", "localhost", "::1"}
+    if not is_local and not token:
+        console.print(
+            "[red]拒绝启动：绑定非本机地址必须提供 --token[/red]\n"
+            "[yellow]示例：zhiji web --host 0.0.0.0 --token <你的令牌>[/yellow]"
+        )
+        raise typer.Exit(1)
+    access = f"http://{host}:{port}"
+    if token:
+        access += f"/?token={token}"
+    console.print(f"打开 {access}")
+    uvicorn.run(create_app(_manager(), token=token), host=host, port=port)
 
 
 def _importable(module: str) -> str:

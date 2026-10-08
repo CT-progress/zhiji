@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -17,6 +18,20 @@ from zhiji.platforms.registry import resolve_adapter
 
 DATA_DIR = PROJECT_ROOT / "data"
 DEFAULT_TITLE = "新对话"
+
+#: 进程内按文件路径复用的可重入锁，避免同一会话文件的读改写竞争。
+_LOCKS: dict[str, threading.RLock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _lock_for(path: Path) -> threading.RLock:
+    key = str(path.resolve()) if path.exists() else str(path.absolute())
+    with _LOCKS_GUARD:
+        lock = _LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _LOCKS[key] = lock
+        return lock
 
 CHAT_SYSTEM_PROMPT = (
     "你是知记助手，一个帮助用户深度学习和系统整理知识的中文助手。\n"
@@ -65,6 +80,7 @@ class ChatStore:
     def __init__(self, data_dir: str | Path | None = None) -> None:
         self.data_dir = Path(data_dir) if data_dir else DATA_DIR
         self.path = self.data_dir / "conversations.json"
+        self._lock = _lock_for(self.path)
 
     def _read(self) -> list[Conversation]:
         if not self.path.exists():
@@ -87,30 +103,34 @@ class ChatStore:
         tmp.replace(self.path)
 
     def list(self) -> list[Conversation]:
-        return sorted(self._read(), key=lambda c: c.updated_at, reverse=True)
+        with self._lock:
+            return sorted(self._read(), key=lambda c: c.updated_at, reverse=True)
 
     def get(self, conversation_id: str) -> Conversation:
-        for conversation in self._read():
-            if conversation.id == conversation_id:
-                return conversation
+        with self._lock:
+            for conversation in self._read():
+                if conversation.id == conversation_id:
+                    return conversation
         raise ChatNotFoundError(f"会话不存在: {conversation_id}", hint="会话可能已被删除")
 
     def create(self, title: str = DEFAULT_TITLE, model_name: str | None = None) -> Conversation:
         conversation = Conversation(title=(title or DEFAULT_TITLE).strip(), model_name=model_name)
-        data = self._read()
-        data.append(conversation)
-        self._write(data)
+        with self._lock:
+            data = self._read()
+            data.append(conversation)
+            self._write(data)
         return conversation
 
     def update(self, conversation_id: str, **changes: str | None) -> Conversation:
-        conversation = self.get(conversation_id)
-        payload = conversation.model_dump()
-        for key in ("title", "model_name"):
-            if key in changes and changes[key] is not None:
-                payload[key] = changes[key]
-        conversation = Conversation.model_validate(payload)
-        conversation.updated_at = datetime.now(UTC)
-        self._replace(conversation)
+        with self._lock:
+            conversation = self.get(conversation_id)
+            payload = conversation.model_dump()
+            for key in ("title", "model_name"):
+                if key in changes and changes[key] is not None:
+                    payload[key] = changes[key]
+            conversation = Conversation.model_validate(payload)
+            conversation.updated_at = datetime.now(UTC)
+            self._replace(conversation)
         return conversation
 
     def attach_note(
@@ -124,44 +144,48 @@ class ChatStore:
         title: str | None = None,
     ) -> Conversation:
         """把生成的笔记绑定到会话，后续对话即可基于笔记上下文。"""
-        conversation = self.get(conversation_id)
-        payload = conversation.model_dump()
-        for key, value in {
-            "platform": platform,
-            "source_url": source_url,
-            "note_content": note_content,
-            "note_path": note_path,
-        }.items():
-            if value is not None:
-                payload[key] = value
-        if title:
-            payload["title"] = title.strip()[:60] or conversation.title
-        conversation = Conversation.model_validate(payload)
-        conversation.updated_at = datetime.now(UTC)
-        self._replace(conversation)
+        with self._lock:
+            conversation = self.get(conversation_id)
+            payload = conversation.model_dump()
+            for key, value in {
+                "platform": platform,
+                "source_url": source_url,
+                "note_content": note_content,
+                "note_path": note_path,
+            }.items():
+                if value is not None:
+                    payload[key] = value
+            if title:
+                payload["title"] = title.strip()[:60] or conversation.title
+            conversation = Conversation.model_validate(payload)
+            conversation.updated_at = datetime.now(UTC)
+            self._replace(conversation)
         return conversation
 
     def delete(self, conversation_id: str) -> None:
-        self.get(conversation_id)
-        data = [c for c in self._read() if c.id != conversation_id]
-        self._write(data)
+        with self._lock:
+            self.get(conversation_id)
+            data = [c for c in self._read() if c.id != conversation_id]
+            self._write(data)
 
     def append_message(self, conversation_id: str, role: Literal["user", "assistant"], content: str) -> Conversation:
-        conversation = self.get(conversation_id)
-        conversation.messages.append(ChatMessage(role=role, content=content))
-        conversation.updated_at = datetime.now(UTC)
-        if role == "user" and conversation.title == DEFAULT_TITLE:
-            conversation.title = _auto_title(content)
-        self._replace(conversation)
+        with self._lock:
+            conversation = self.get(conversation_id)
+            conversation.messages.append(ChatMessage(role=role, content=content))
+            conversation.updated_at = datetime.now(UTC)
+            if role == "user" and conversation.title == DEFAULT_TITLE:
+                conversation.title = _auto_title(content)
+            self._replace(conversation)
         return conversation
 
     def _replace(self, conversation: Conversation) -> None:
-        data = self._read()
-        for index, current in enumerate(data):
-            if current.id == conversation.id:
-                data[index] = conversation
-                break
-        self._write(data)
+        with self._lock:
+            data = self._read()
+            for index, current in enumerate(data):
+                if current.id == conversation.id:
+                    data[index] = conversation
+                    break
+            self._write(data)
 
 
 def build_chat_messages(conversation: Conversation, source_context: str | None = None) -> list[dict]:

@@ -9,7 +9,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -97,10 +97,37 @@ def _strip_frontmatter(markdown: str) -> str:
     return markdown
 
 
-def create_app(config_manager: ConfigManager | None = None, data_dir: str | Path | None = None) -> FastAPI:
+def create_app(
+    config_manager: ConfigManager | None = None,
+    data_dir: str | Path | None = None,
+    token: str | None = None,
+) -> FastAPI:
     config = config_manager or ConfigManager()
     store = ChatStore(data_dir)
     app = FastAPI(title="知记本地配置", version="0.1.0", docs_url="/docs")
+
+    if token:
+
+        @app.middleware("http")
+        async def auth_middleware(request: Request, call_next):
+            """非本机绑定时校验访问令牌，避免 API Key / Cookie 接口暴露在局域网。"""
+
+            provided = (
+                request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+                or request.query_params.get("token")
+                or request.cookies.get("zhiji_token")
+            )
+            if request.url.path.startswith("/api/") and provided != token:
+                return JSONResponse(
+                    status_code=401,
+                    content=error_response(
+                        ZhijiError("缺少或无效的访问令牌", hint="请使用带 ?token= 的地址访问")
+                    ),
+                )
+            response = await call_next(request)
+            if request.url.path == "/" and request.query_params.get("token") == token:
+                response.set_cookie("zhiji_token", token, httponly=True, samesite="strict")
+            return response
 
     @app.exception_handler(ZhijiError)
     async def zhiji_error_handler(request, exc: ZhijiError):
@@ -186,17 +213,20 @@ def create_app(config_manager: ConfigManager | None = None, data_dir: str | Path
     def save_note(payload: dict) -> dict:
         content = payload.get("content", "")
         path_str = payload.get("path")
+        output_root = config.resolve_output_dir().resolve()
         if path_str:
-            # 覆盖已有笔记文件（“设为当前笔记”场景）
-            path = Path(path_str)
+            # 覆盖已有笔记文件（“设为当前笔记”场景），仅允许写入输出目录内
+            path = Path(path_str).resolve()
             if path.suffix.lower() != ".md":
                 raise HTTPException(status_code=400, detail="仅支持 Markdown 文件")
+            if not path.is_relative_to(output_root):
+                raise HTTPException(status_code=400, detail="只能覆盖输出目录内的笔记文件")
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
         else:
             title = payload.get("title", "未命名笔记")
             safe_title = re.sub(r'[\\/:*?"<>|]', "_", title)[:80]
-            notes_dir = Path(config.resolve_output_dir()) / "notes"
+            notes_dir = output_root / "notes"
             notes_dir.mkdir(parents=True, exist_ok=True)
             path = notes_dir / f"{safe_title}.md"
             path.write_text(content, encoding="utf-8")

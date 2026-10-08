@@ -243,3 +243,57 @@ def test_open_conversation_fallback_to_current_model(tmp_path, monkeypatch):
 
     fetched = client.get(f"/api/conversations/{conv['id']}").json()["conversation"]
     assert fetched["model_name"] == "NewModel"
+
+def test_note_save_rejects_path_outside_output(tmp_path):
+    client, _ = _client(tmp_path)
+    out = tmp_path / "out"
+    client.put("/api/settings", json={"output_dir": str(out)})
+
+    outside = tmp_path / "evil.md"
+    resp = client.post("/api/note/save", json={"content": "# x", "path": str(outside)})
+    assert resp.status_code == 400
+    assert not outside.exists()
+
+
+def test_note_save_allows_path_inside_output(tmp_path):
+    client, _ = _client(tmp_path)
+    out = tmp_path / "out"
+    client.put("/api/settings", json={"output_dir": str(out)})
+
+    target = out / "notes" / "mine.md"
+    resp = client.post("/api/note/save", json={"content": "# hi", "path": str(target)})
+    assert resp.status_code == 200
+    assert target.read_text(encoding="utf-8") == "# hi"
+
+
+def test_note_save_without_path_uses_output_dir(tmp_path):
+    client, _ = _client(tmp_path)
+    out = tmp_path / "out"
+    client.put("/api/settings", json={"output_dir": str(out)})
+
+    resp = client.post("/api/note/save", json={"content": "# hi", "title": "我的笔记"})
+    assert resp.status_code == 200
+    assert (out / "notes" / "我的笔记.md").read_text(encoding="utf-8") == "# hi"
+
+
+def test_api_requires_token_when_configured(tmp_path):
+    cm = ConfigManager(tmp_path / "zhiji.json")
+    client = TestClient(create_app(cm, data_dir=tmp_path / "data", token="secret"))
+
+    # 无令牌 -> 401
+    assert client.get("/api/health").status_code == 401
+    # 页面本身可访问
+    assert client.get("/").status_code == 200
+    # Bearer 头放行
+    assert client.get("/api/health", headers={"Authorization": "Bearer secret"}).status_code == 200
+    # 查询参数放行
+    assert client.get("/api/health?token=secret").status_code == 200
+    # 通过首页 ?token= 下发 cookie 后，普通请求也放行
+    assert client.get("/?token=secret").status_code == 200
+    assert client.get("/api/health").status_code == 200
+
+
+def test_api_open_when_no_token(tmp_path):
+    client, _ = _client(tmp_path)
+    assert client.get("/api/health").status_code == 200
+

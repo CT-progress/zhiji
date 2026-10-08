@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import os
 import re
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
 
 from zhiji.errors import InputUnsupportedError, PlatformFetchError
-from zhiji.config import PROJECT_ROOT
 from zhiji.models import (
+    AppSettings,
     ContentBundle,
     ContentRef,
     ContentType,
@@ -23,6 +23,14 @@ from zhiji.models import (
 from zhiji.platforms.base import PlatformAdapter
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+
+
+def _load_settings() -> AppSettings:
+    """读取全局设置，使抖音转写与其它平台共用同一套 whisper 参数。"""
+
+    from zhiji.config import ConfigManager
+
+    return ConfigManager().get().settings
 
 
 class DouyinAdapter(PlatformAdapter):
@@ -74,6 +82,7 @@ class DouyinAdapter(PlatformAdapter):
 
         from zhiji.platforms.douyin_cookies import load_profile
 
+        settings = _load_settings()
         profile = load_profile()
         cookie_str = profile.cookie if profile else ""
 
@@ -179,7 +188,8 @@ class DouyinAdapter(PlatformAdapter):
                 try:
                     tmp_dir = Path(tempfile.gettempdir()) / "zhiji_audio"
                     tmp_dir.mkdir(parents=True, exist_ok=True)
-                    downloaded_audio = tmp_dir / "douyin_audio.mp3"
+                    # 每次用唯一文件名，避免并发请求互相覆盖
+                    downloaded_audio = tmp_dir / f"douyin_{uuid4().hex}.mp3"
                     with httpx.Client(timeout=60, follow_redirects=True) as client:
                         resp = client.get(
                             audio_urls[0],
@@ -188,18 +198,19 @@ class DouyinAdapter(PlatformAdapter):
                         )
                         resp.raise_for_status()
                         downloaded_audio.write_bytes(resp.content)
-                except Exception:
+                except (httpx.HTTPError, OSError):
                     downloaded_audio = None
 
             # 转写音频
             if downloaded_audio and downloaded_audio.exists() and downloaded_audio.stat().st_size > 1000:
                 report("音频下载完成，开始本地转写（faster-whisper）…")
-                segments = self._transcribe_audio(downloaded_audio)
+                segments = self._transcribe_audio(downloaded_audio, settings)
                 report(f"转写完成，共 {len(segments)} 段")
-                try:
-                    downloaded_audio.unlink(missing_ok=True)
-                except OSError:
-                    pass
+                if not settings.keep_audio:
+                    try:
+                        downloaded_audio.unlink(missing_ok=True)
+                    except OSError:
+                        pass
 
             # 构造返回数据
             raw_data = {
@@ -240,51 +251,16 @@ class DouyinAdapter(PlatformAdapter):
         audio_urls = bundle.metadata.raw.get("audio_urls", [])
         return audio_urls[0] if audio_urls else None
 
-    def _download_audio(self, audio_url: str) -> Path | None:
-        """下载音频文件到临时目录。"""
-        try:
-            tmp_dir = Path(tempfile.gettempdir()) / "zhiji_audio"
-            tmp_dir.mkdir(parents=True, exist_ok=True)
-            audio_path = tmp_dir / "douyin_audio.mp3"
-
-            with httpx.Client(timeout=60, follow_redirects=True) as client:
-                response = client.get(
-                    audio_url,
-                    headers={
-                        "User-Agent": _UA,
-                        "Referer": "https://www.douyin.com/",
-                    },
-                )
-                response.raise_for_status()
-                audio_path.write_bytes(response.content)
-
-            return audio_path if audio_path.exists() else None
-        except Exception:
-            return None
-
-    def _transcribe_audio(self, audio_path: Path) -> list[TranscriptSegment]:
-        """使用 faster-whisper 本地模型将音频转为文字。"""
-        try:
-            from faster_whisper import WhisperModel
-        except ImportError:
-            return []
+    def _transcribe_audio(
+        self, audio_path: Path, settings: AppSettings
+    ) -> list[TranscriptSegment]:
+        """用与全局设置一致的 faster-whisper 参数将音频转为文字。"""
+        from zhiji.errors import TranscriptMissingError
+        from zhiji.transcription.engine import transcribe_file
 
         try:
-            # 使用本地 tiny 模型
-            model_path = str(PROJECT_ROOT / "models" / "whisper-tiny")
-            model = WhisperModel(model_path, device="cpu", compute_type="int8")
-            segments_iter, _ = model.transcribe(str(audio_path), language="zh", vad_filter=True)
-            
-            segments = []
-            for seg in segments_iter:
-                if seg.text.strip():
-                    segments.append(TranscriptSegment(
-                        start=round(seg.start, 2),
-                        end=round(seg.end, 2),
-                        text=seg.text.strip(),
-                    ))
-            return segments
-        except Exception:
+            return transcribe_file(audio_path, settings)
+        except TranscriptMissingError:
             return []
 
     def search(self, keyword: str, limit: int = 10) -> list:

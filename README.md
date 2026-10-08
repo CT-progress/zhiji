@@ -39,6 +39,10 @@ zhiji check-env    # 验证环境
 zhiji web          # 默认 http://127.0.0.1:8000
 ```
 
+> 绑定非本机地址（如 `--host 0.0.0.0`）会暴露 API Key / Cookie 管理接口，
+> 因此必须同时提供 `--token`，访问时带上 `?token=`：
+> `zhiji web --host 0.0.0.0 --token <你的令牌>`
+
 1. 左下角「设置 → 模型」添加一个 LLM 模型（名称 / API Key / Base URL / 模型 ID）
 2. 「设置 → Cookie」按页面提示粘贴各平台 Cookie（B 站需含 `SESSDATA`，知乎需含 `d_c0`，抖音需含 `sessionid`）
 3. 回到首页选择平台、粘贴链接，生成笔记后可继续对话修改
