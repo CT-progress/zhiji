@@ -352,6 +352,8 @@ def create_app(
     def list_platforms() -> dict:
         from zhiji.platforms.bilibili_cookies import load_profile as load_bilibili_profile
         from zhiji.platforms.douyin_cookies import load_profile as load_douyin_profile
+        from zhiji.platforms.xiaohongshu_cookies import load_profile as load_xiaohongshu_profile
+        from zhiji.platforms.zhihu_cookies import load_profile as load_zhihu_profile
 
         enabled = config.get().settings.platforms
         cards = [
@@ -377,15 +379,15 @@ def create_app(
                 "desc": "文章 / 回答 → 图文笔记",
                 "placeholder": "https://zhuanlan.zhihu.com/p/…",
                 "enabled": enabled.zhihu,
-                "cookie_configured": None,
+                "cookie_configured": bool(load_zhihu_profile()),
             },
             {
                 "key": "xiaohongshu",
                 "name": "小红书",
-                "desc": "即将支持",
-                "placeholder": "",
-                "enabled": False,
-                "cookie_configured": None,
+                "desc": "图文 / 视频笔记 → 正文与媒体信息",
+                "placeholder": "https://www.xiaohongshu.com/explore/… 或 https://xhslink.com/…",
+                "enabled": enabled.xiaohongshu,
+                "cookie_configured": bool(load_xiaohongshu_profile()),
             },
         ]
         return {"platforms": cards}
@@ -476,6 +478,37 @@ def create_app(
     @app.delete("/api/cookies/bilibili")
     def delete_bilibili_cookie() -> dict:
         from zhiji.platforms.bilibili_cookies import profile_path
+        path = profile_path()
+        if path.exists():
+            path.unlink()
+        return {"ok": True}
+
+    @app.get("/api/cookies/xiaohongshu")
+    def get_xiaohongshu_cookie() -> dict:
+        from zhiji.platforms.xiaohongshu_cookies import load_profile
+        profile = load_profile()
+        if profile:
+            return {
+                "configured": True,
+                "saved_at": profile.saved_at,
+                "cookie_length": len(profile.cookie),
+            }
+        return {"configured": False}
+
+    @app.post("/api/cookies/xiaohongshu")
+    def save_xiaohongshu_cookie(payload: dict) -> dict:
+        from zhiji.platforms.xiaohongshu_cookies import save_profile
+        cookie = payload.get("cookie", "")
+        if not cookie:
+            raise HTTPException(status_code=400, detail="Cookie 不能为空")
+        if "web_session=" not in cookie:
+            raise HTTPException(status_code=400, detail="Cookie 需包含 web_session 字段")
+        save_profile(cookie, payload.get("user_agent", ""))
+        return {"ok": True}
+
+    @app.delete("/api/cookies/xiaohongshu")
+    def delete_xiaohongshu_cookie() -> dict:
+        from zhiji.platforms.xiaohongshu_cookies import profile_path
         path = profile_path()
         if path.exists():
             path.unlink()

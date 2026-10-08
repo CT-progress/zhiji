@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import contextlib
 import re
+import threading
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 
@@ -26,8 +28,12 @@ from zhiji.models import (
 )
 from zhiji.platforms.base import PlatformAdapter
 from zhiji.platforms.bilibili_cookies import BilibiliProfile, load_profile, save_profile
+from zhiji.platforms.bilibili_wbi import build_signed_params, mixin_key_from_urls
 
 _BV_RE = re.compile(r"BV[0-9A-Za-z]{10}")
+_WBI_KEY_TTL = 6 * 60 * 60
+_WBI_CACHE_LOCK = threading.Lock()
+_WBI_CACHE: tuple[float, str] | None = None
 _UA = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
@@ -88,9 +94,22 @@ class BilibiliAdapter(PlatformAdapter):
         )
 
     def search(self, keyword: str, limit: int = 10) -> list[SearchResult]:
+        """使用 wbi 签名搜索视频，避免旧匿名接口的 412 风控。"""
+
+        page_size = max(1, min(limit, 50))
+        params = build_signed_params(
+            {
+                "search_type": "video",
+                "keyword": keyword,
+                "page": 1,
+                "page_size": page_size,
+            },
+            self._get_wbi_key(),
+        )
         data = self._get_json(
-            "https://api.bilibili.com/x/web-interface/search/type",
-            params={"search_type": "video", "keyword": keyword},
+            "https://api.bilibili.com/x/web-interface/wbi/search/type",
+            params=params,
+            headers={"Referer": "https://search.bilibili.com/"},
         )
         if data.get("code") != 0:
             raise PlatformFetchError(
@@ -107,12 +126,31 @@ class BilibiliAdapter(PlatformAdapter):
                     platform=self.platform,
                     title=_strip_tags(item.get("title", "")),
                     author=item.get("author"),
-                    duration=item.get("duration"),
+                    duration=_parse_duration(item.get("duration")),
                     url=f"https://www.bilibili.com/video/{bvid}",
                     description=item.get("description"),
                 )
             )
         return out
+
+    def _get_wbi_key(self) -> str:
+        global _WBI_CACHE
+
+        now = time.monotonic()
+        with _WBI_CACHE_LOCK:
+            if _WBI_CACHE and now - _WBI_CACHE[0] < _WBI_KEY_TTL:
+                return _WBI_CACHE[1]
+        nav = self._get_json("https://api.bilibili.com/x/web-interface/nav")
+        wbi_img = nav.get("data", {}).get("wbi_img") or {}
+        key = mixin_key_from_urls(
+            str(wbi_img.get("img_url", "")),
+            str(wbi_img.get("sub_url", "")),
+        )
+        if not key:
+            raise PlatformFetchError("B 站未返回有效的 wbi 密钥", platform=self.platform.value)
+        with _WBI_CACHE_LOCK:
+            _WBI_CACHE = (now, key)
+        return key
 
     def _resolve_bvid(self, ref: ContentRef) -> str:
         if ref.content_id != "short":
@@ -187,6 +225,24 @@ def _pick_subtitle(subtitles: list[dict]) -> dict | None:
 
 def _strip_tags(value: str) -> str:
     return re.sub(r"<[^>]+>", "", value)
+
+
+def _parse_duration(value: object) -> int | None:
+    """把 B 站搜索返回的 ``mm:ss`` / ``hh:mm:ss`` 转成秒。"""
+
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    parts = str(value).strip().split(":")
+    if not 1 <= len(parts) <= 3 or any(not part.isdigit() for part in parts):
+        return None
+    seconds = 0
+    for part in parts:
+        seconds = seconds * 60 + int(part)
+    return seconds
 
 
 def login_with_browser() -> BilibiliProfile:

@@ -1,13 +1,14 @@
 # 知记 zhiji
 
-把抖音、B 站、知乎等平台的知识视频 / 图文，一键整理成结构化 Markdown 笔记的本地工具。提供 Web 工作台（聊天式交互 + 可视化设置）和 CLI 两种使用方式。
+把抖音、B 站、知乎、小红书等平台的知识视频 / 图文，一键整理成结构化 Markdown 笔记的本地工具。提供 Web 工作台（聊天式交互 + 可视化设置）和 CLI 两种使用方式。
 
 ## 功能特性
 
-- **三平台链路（已验证可用）**
+- **四平台链路**
   - **抖音**：Cookie 登录态 + API 抓取 + Playwright 音频拦截，Whisper 转写
-  - **B 站**：SESSDATA 登录态下优先使用官方字幕（中文 / ai-zh 优选）；无字幕时 yt-dlp 下载音频 + Whisper 兜底
+  - **B 站**：SESSDATA 登录态下优先使用官方字幕（中文 / ai-zh 优选）；无字幕时 yt-dlp 下载音频 + Whisper 兜底；关键词搜索已改用 WBI 签名接口
   - **知乎**：Cookie 白名单 + x-zse-96 签名，直接走官方 API 拿全文
+  - **小红书**：解析图文 / 视频笔记链接与短链，提取正文、标签、作者、发布时间和媒体信息；需登录内容可配置 `web_session` Cookie
 - **Web 工作台**：粘贴链接 → 流式生成笔记 → 针对笔记继续追问 / 修改；会话本地持久化
 - **可视化设置**：LLM 模型管理（增删改、默认模型、连通测试）、保存路径、转写参数、四平台 Cookie 管理（附获取教程）
 - **CLI**：`zhiji note` / `zhiji search` / 登录态收割 / 环境检查
@@ -44,7 +45,7 @@ zhiji web          # 默认 http://127.0.0.1:8000
 > `zhiji web --host 0.0.0.0 --token <你的令牌>`
 
 1. 左下角「设置 → 模型」添加一个 LLM 模型（名称 / API Key / Base URL / 模型 ID）
-2. 「设置 → Cookie」按页面提示粘贴各平台 Cookie（B 站需含 `SESSDATA`，知乎需含 `d_c0`，抖音需含 `sessionid`）
+2. 「设置 → Cookie」按页面提示粘贴各平台 Cookie（B 站需含 `SESSDATA`，知乎需含 `d_c0`，抖音需含 `sessionid`，小红书需含 `web_session`）
 3. 回到首页选择平台、粘贴链接，生成笔记后可继续对话修改
 
 ### CLI 方式
@@ -55,6 +56,7 @@ zhiji search <关键词>          # 搜索（默认 bilibili）
 zhiji douyin-login             # 浏览器登录并保存抖音登录态
 zhiji zhihu-login              # 同上，知乎
 zhiji bilibili-login           # 同上，B 站
+zhiji xiaohongshu-login        # 同上，小红书（使用 Edge 持久登录）
 zhiji models                   # 列出模型配置
 zhiji config-show              # 查看当前设置
 ```
@@ -68,8 +70,9 @@ src/zhiji/
 ├── config.py            # 配置管理（config/zhiji.json）
 ├── platforms/           # 平台适配器 + 各平台 Cookie 持久化
 │   ├── douyin.py / douyin_cookies.py
-│   ├── bilibili.py / bilibili_cookies.py
-│   └── zhihu.py / zhihu_cookies.py / zse.py（x-zse-96 签名）
+│   ├── bilibili.py / bilibili_cookies.py / bilibili_wbi.py（WBI 签名）
+│   ├── zhihu.py / zhihu_cookies.py / zse.py（x-zse-96 签名）
+│   └── xiaohongshu.py / xiaohongshu_cookies.py
 ├── transcription/       # faster-whisper 转写引擎
 ├── writers/             # Markdown 笔记落盘
 ├── llm/                 # OpenAI 兼容客户端 + 提示词
@@ -96,5 +99,5 @@ Ubuntu 与 Windows 上按 Python 3.11 / 3.12 跑 ruff、mypy、pytest 三件套�
 ## 路线图
 
 - [x] B 站 / 知乎 / 抖音链路 + Web 工作台
-- [ ] 小红书适配器
-- [ ] B 站搜索（需 wbi 签名，当前匿名 412）
+- [x] 小红书图文 / 视频笔记适配器与 Cookie 管理（搜索暂未接入）
+- [x] B 站搜索（WBI 签名接口）

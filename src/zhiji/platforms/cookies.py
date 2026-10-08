@@ -1,7 +1,7 @@
-"""三平台登录态（Cookie + UA）持久化的共享实现。
+"""各平台登录态（Cookie + UA）持久化的共享实现。
 
 各平台模块只保留自己的 Cookie 白名单与薄封装（``bilibili_cookies`` /
-``douyin_cookies`` / ``zhihu_cookies``），通用逻辑集中在这里：
+``douyin_cookies`` / ``zhihu_cookies`` / ``xiaohongshu_cookies``），通用逻辑集中在这里：
 
 - :func:`prune_cookie` 按白名单精简 Cookie，去重并剔除浏览器残留；
 - :func:`save_cookie_profile` 以临时文件 + 原子替换写入；

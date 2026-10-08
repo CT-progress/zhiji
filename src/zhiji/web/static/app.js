@@ -937,7 +937,7 @@ function renderGeneralPanel(body) {
     Object.keys(labels).map((k) =>
       '<label class="check-line"><input type="checkbox" id="plat-' + k + '"' + (platforms[k] ? ' checked' : '') + '> ' + labels[k] + '</label>').join('') +
     '</div>' +
-    '<div class="cookie-hint">小红书适配器尚未实现，勾选后暂不可用。</div>' +
+    '<div class="cookie-hint">小红书部分笔记需要登录 Cookie；未配置时会先尝试公开页面。</div>' +
     '<button class="btn primary" id="btn-save-general" type="button" style="margin-top:12px">保存设置</button>';
   $('btn-save-general').addEventListener('click', saveGeneralSettings);
 }
@@ -946,6 +946,7 @@ const COOKIE_PLATFORMS = [
   { key: 'douyin', name: '抖音', required: '需包含 sessionid', placeholder: '粘贴抖音 Cookie（需包含 sessionid）' },
   { key: 'bilibili', name: 'B 站', required: '需包含 SESSDATA，配置后优先使用官方字幕', placeholder: '粘贴 B 站 Cookie（需包含 SESSDATA）' },
   { key: 'zhihu', name: '知乎', required: '需包含 d_c0', placeholder: '粘贴知乎 Cookie（需包含 d_c0）' },
+  { key: 'xiaohongshu', name: '小红书', required: '需包含 web_session', placeholder: '粘贴小红书 Cookie（需包含 web_session）' },
 ];
 
 async function renderCookiesPanel(body) {
@@ -972,11 +973,6 @@ async function renderCookiesPanel(body) {
       inner +
       '</div>');
   }
-  parts.push(
-    '<div class="cookie-card disabled-card">' +
-    '<div class="cookie-card-title">小红书<span class="cookie-card-req">暂未支持</span></div>' +
-    '<div class="cookie-hint" style="margin-top:0">小红书适配器尚未实现，暂不需要配置 Cookie。</div>' +
-    '</div>');
   parts.push(
     '<div class="cookie-howto">' +
     '<h3>如何获取 Cookie？</h3>' +

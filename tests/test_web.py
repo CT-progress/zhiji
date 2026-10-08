@@ -75,6 +75,67 @@ def test_zhihu_cookie_endpoints(tmp_path, monkeypatch):
     assert client.get("/api/cookies/zhihu").json() == {"configured": False}
 
 
+def test_xiaohongshu_cookie_endpoints(tmp_path, monkeypatch):
+    from zhiji.platforms import xiaohongshu_cookies
+
+    monkeypatch.setattr(
+        xiaohongshu_cookies,
+        "DEFAULT_PROFILE_PATH",
+        tmp_path / "xiaohongshu-profile.json",
+    )
+    client, _ = _client(tmp_path)
+
+    assert client.get("/api/cookies/xiaohongshu").json() == {"configured": False}
+
+    empty = client.post("/api/cookies/xiaohongshu", json={"cookie": ""})
+    assert empty.status_code == 400
+
+    missing_session = client.post(
+        "/api/cookies/xiaohongshu",
+        json={"cookie": "a1=dev; junk=1"},
+    )
+    assert missing_session.status_code == 400
+
+    saved = client.post(
+        "/api/cookies/xiaohongshu",
+        json={"cookie": "a1=dev; web_session=abc; junk=1"},
+    )
+    assert saved.json()["ok"] is True
+
+    status = client.get("/api/cookies/xiaohongshu").json()
+    assert status["configured"] is True
+    assert status["cookie_length"] > 0
+
+    assert client.delete("/api/cookies/xiaohongshu").json()["ok"] is True
+    assert client.get("/api/cookies/xiaohongshu").json() == {"configured": False}
+
+
+def test_platforms_lists_xiaohongshu_enabled(tmp_path, monkeypatch):
+    from zhiji.platforms import xiaohongshu_cookies
+
+    monkeypatch.setattr(
+        xiaohongshu_cookies,
+        "DEFAULT_PROFILE_PATH",
+        tmp_path / "xiaohongshu-profile.json",
+    )
+    client, _ = _client(tmp_path)
+
+    cards = {card["key"]: card for card in client.get("/api/platforms").json()["platforms"]}
+    assert set(cards) == {"douyin", "bilibili", "zhihu", "xiaohongshu"}
+
+    xhs = cards["xiaohongshu"]
+    assert xhs["enabled"] is True
+    assert xhs["placeholder"]
+    assert xhs["cookie_configured"] is False
+
+    client.post(
+        "/api/cookies/xiaohongshu",
+        json={"cookie": "a1=dev; web_session=abc"},
+    )
+    after = {c["key"]: c for c in client.get("/api/platforms").json()["platforms"]}
+    assert after["xiaohongshu"]["cookie_configured"] is True
+
+
 def test_conversation_crud(tmp_path):
     client, _ = _client(tmp_path)
     created = client.post("/api/conversations", json={})

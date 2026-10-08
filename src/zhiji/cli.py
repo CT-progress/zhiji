@@ -50,7 +50,7 @@ def _handle_error(exc: Exception) -> None:
 
 @app.command()
 def note(
-    url: str = typer.Argument(..., help="B 站 / 知乎 / 抖音内容链接"),
+    url: str = typer.Argument(..., help="B 站 / 知乎 / 抖音 / 小红书内容链接"),
     model: str | None = typer.Option(None, help="指定模型名称"),
     output_dir: str | None = typer.Option(None, help="笔记输出目录"),
     stream: bool = typer.Option(False, "--stream", "-s", help="启用流式输出"),
@@ -244,6 +244,22 @@ def bilibili_login() -> None:
         _handle_error(exc)
     console.print(
         f"[green]B 站登录态已保存[/green]（{len(profile.cookie)} 字节 Cookie，"
+        f"保存于 {profile.saved_at}）"
+    )
+
+
+@app.command("xiaohongshu-login")
+def xiaohongshu_login() -> None:
+    """打开 Edge 完成小红书登录，并保存 Cookie + UA。"""
+
+    from zhiji.platforms.xiaohongshu import login_with_browser
+
+    try:
+        profile = login_with_browser()
+    except ZhijiError as exc:
+        _handle_error(exc)
+    console.print(
+        f"[green]小红书登录态已保存[/green]（{len(profile.cookie)} 字节 Cookie，"
         f"保存于 {profile.saved_at}）"
     )
 

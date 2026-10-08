@@ -14,6 +14,7 @@ from zhiji.platforms.bilibili import BilibiliAdapter, _pick_subtitle
 from zhiji.platforms.bilibili_cookies import load_profile, prune_cookie, save_profile
 from zhiji.platforms.douyin import DouyinAdapter
 from zhiji.platforms.registry import detect_platform
+from zhiji.platforms.xiaohongshu import XiaohongshuAdapter
 from zhiji.platforms.zhihu import ZhihuAdapter, _api_url
 from zhiji.platforms.zhihu_cookies import ZhihuProfile
 
@@ -22,6 +23,7 @@ def test_detect_platform():
     assert detect_platform("https://www.bilibili.com/video/BV1xx411c7mD") == Platform.BILIBILI
     assert detect_platform("https://www.zhihu.com/question/123") == Platform.ZHIHU
     assert detect_platform("https://v.douyin.com/abc123/") == Platform.DOUYIN
+    assert detect_platform("https://www.xiaohongshu.com/explore/abc123") == Platform.XIAOHONGSHU
 
 
 def test_bilibili_parse_url():
@@ -180,6 +182,7 @@ def test_registry_supports_short_links_and_subdomains():
     assert detect_platform("https://b23.tv/abc123") == Platform.BILIBILI
     assert detect_platform("https://www.iesdouyin.com/share/video/123") == Platform.DOUYIN
     assert detect_platform("https://ZHIHU.COM/question/123") == Platform.ZHIHU
+    assert detect_platform("https://xhslink.com/abc") == Platform.XIAOHONGSHU
 
 
 def test_registry_rejects_lookalike_domain():
@@ -195,6 +198,7 @@ def test_resolve_adapter_returns_platform_adapter():
     assert isinstance(resolve_adapter("https://www.bilibili.com/video/BV1xx411c7mD"), BilibiliAdapter)
     assert isinstance(resolve_adapter("https://www.zhihu.com/question/123"), ZhihuAdapter)
     assert isinstance(resolve_adapter("https://www.douyin.com/video/7123456789012345678"), DouyinAdapter)
+    assert isinstance(resolve_adapter("https://www.xiaohongshu.com/explore/abc123"), XiaohongshuAdapter)
 
 
 def test_adapter_rejects_unrecognised_urls():

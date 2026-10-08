@@ -107,7 +107,7 @@ class PlatformSettings(BaseModel):
     bilibili: bool = True
     zhihu: bool = True
     douyin: bool = True
-    xiaohongshu: bool = False
+    xiaohongshu: bool = True
 
 
 class AppSettings(BaseModel):
