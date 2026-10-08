@@ -73,7 +73,7 @@ src/zhiji/
 ├── transcription/       # faster-whisper 转写引擎
 ├── writers/             # Markdown 笔记落盘
 ├── llm/                 # OpenAI 兼容客户端 + 提示词
-└── web/                 # FastAPI 后端 + 单文件前端（static/config.html）
+└── web/                 # FastAPI 后端 + 前端（static/：config.html + app.css + app.js）
 tests/                   # pytest 测试
 ```
 

@@ -12,6 +12,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from zhiji.chat import (
@@ -27,7 +28,8 @@ from zhiji.errors import ConfigError, GenerationCancelledError, LLMError, ZhijiE
 from zhiji.llm.client import LLMClient
 from zhiji.models import LLMModelConfig
 
-CONFIG_HTML = Path(__file__).resolve().parent / "static" / "config.html"
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+CONFIG_HTML = STATIC_DIR / "config.html"
 
 # 异步生成器轮询队列超时的哨兵值（区别于队列里的 None 结束标记）
 _QUEUE_EMPTY = object()
@@ -118,6 +120,7 @@ def create_app(
     config = config_manager or ConfigManager()
     store = ChatStore(data_dir)
     app = FastAPI(title="知记本地配置", version="0.1.0", docs_url="/docs")
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     if token:
 

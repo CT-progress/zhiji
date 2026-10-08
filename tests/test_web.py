@@ -337,3 +337,24 @@ def test_note_generate_stream(tmp_path, monkeypatch):
     assert '"delta"' in body
     assert '"done"' in body
     assert '"error"' not in body
+
+
+def test_frontend_assets_split_from_html(tmp_path):
+    """#16：前端已拆成 index / css / js 三个静态资源，且页面引用外部资源。"""
+    client, _ = _client(tmp_path)
+
+    index = client.get("/")
+    assert index.status_code == 200
+    assert "/static/app.css" in index.text
+    assert "/static/app.js" in index.text
+    # 不再内联 <style> / 大段 <script>
+    assert "<style>" not in index.text
+    assert "<script>\n" not in index.text
+
+    css = client.get("/static/app.css")
+    assert css.status_code == 200
+    assert "text/css" in css.headers["content-type"]
+
+    js = client.get("/static/app.js")
+    assert js.status_code == 200
+    assert "javascript" in js.headers["content-type"]
