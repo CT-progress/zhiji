@@ -126,7 +126,7 @@ def test_chat_fetches_supported_link_as_context(tmp_path, monkeypatch):
     conversation = client.post("/api/conversations", json={}).json()["conversation"]
     captured = {}
 
-    monkeypatch.setattr("zhiji.web.app.fetch_link_context", lambda message: "标题：测试文章\n正文：知乎正文")
+    monkeypatch.setattr("zhiji.web.app.extract_supported_links", lambda message: "标题：测试文章\n正文：知乎正文")
     monkeypatch.setattr(
         LLMClient,
         "complete",
@@ -297,3 +297,43 @@ def test_api_open_when_no_token(tmp_path):
     client, _ = _client(tmp_path)
     assert client.get("/api/health").status_code == 200
 
+
+
+def test_note_generate_stream(tmp_path, monkeypatch):
+    from zhiji.models import OutputReceipt
+    from zhiji.pipeline import NotePipeline
+
+    client, _ = _client(tmp_path)
+    client.post(
+        "/api/models",
+        json={"name": "M", "model": "m", "base_url": "http://m", "api_key": "sk-m", "default": True},
+    )
+    note_path = tmp_path / "out" / "note.md"
+    note_path.parent.mkdir(parents=True, exist_ok=True)
+    note_path.write_text("---\ntitle: T\n---\n\n# T\n\n正文\n", encoding="utf-8")
+
+    def fake_run(self, url, **kwargs):
+        stream_callback = kwargs.get("stream_callback")
+        if stream_callback:
+            stream_callback("正文")
+        return OutputReceipt(
+            note_path=note_path,
+            artifact_dir=tmp_path / "out" / "artifacts",
+            platform="zhihu",
+            content_id="zhihu_1",
+            title="标题",
+        )
+
+    monkeypatch.setattr(NotePipeline, "run", fake_run)
+
+    with client.stream(
+        "POST",
+        "/api/note/generate/stream",
+        json={"url": "https://zhuanlan.zhihu.com/p/1"},
+    ) as resp:
+        assert resp.status_code == 200
+        body = "".join(resp.iter_text())
+
+    assert '"delta"' in body
+    assert '"done"' in body
+    assert '"error"' not in body

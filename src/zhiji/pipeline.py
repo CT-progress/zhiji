@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from zhiji.config import ConfigManager
-from zhiji.errors import ConfigError, LLMError
+from zhiji.errors import ConfigError, GenerationCancelledError, LLMError
 from zhiji.llm.client import LLMClient
 from zhiji.llm.prompts import (
     build_chunk_summary_messages,
@@ -51,20 +51,27 @@ class NotePipeline:
         output_dir: str | None = None,
         stream_callback: Callable[[str], None] | None = None,
         progress_callback: Callable[[str, str, str], None] | None = None,
+        cancel_callback: Callable[[], bool] | None = None,
     ) -> OutputReceipt:
         def report(stage: str, message: str, status: str = "start") -> None:
             if progress_callback:
                 progress_callback(stage, message, status)
 
+        def check_cancel() -> None:
+            _raise_if_cancelled(cancel_callback)
+
+        check_cancel()
         report("parse", "解析链接…")
         adapter = resolve_adapter(url)
         ref = adapter.parse_url(url)
         report("parse", f"识别为{_PLATFORM_LABELS.get(ref.platform.value, ref.platform.value)}内容", "ok")
 
+        check_cancel()
         report("fetch", "抓取内容…")
         bundle = adapter.fetch(ref, progress=lambda msg: report("fetch", msg))
         report("fetch", "内容抓取完成", "ok")
 
+        check_cancel()
         warnings: list[str] = []
         if bundle.segments:
             report("transcribe", f"已获取字幕 / 转写文本（{len(bundle.segments)} 段）", "ok")
@@ -105,15 +112,17 @@ class NotePipeline:
         if model is None:
             raise ConfigError("尚未配置可用模型", hint="请在 Web 配置页或 config/zhiji.json 中添加模型")
 
+        check_cancel()
         report("generate", "AI 正在生成笔记…")
         client = LLMClient(model)
         text = bundle.plain_text()
-        messages = self._build_generation_messages(client, bundle, text, report)
+        messages = self._build_generation_messages(client, bundle, text, report, cancel_callback)
 
         # 流式输出 or 普通输出
         if stream_callback:
             response = ""
             for chunk in client.stream_chunks(messages):
+                check_cancel()
                 response += chunk
                 stream_callback(chunk)
         else:
@@ -137,6 +146,7 @@ class NotePipeline:
         bundle: ContentBundle,
         text: str,
         report: Callable[[str, str, str], None],
+        cancel_callback: Callable[[], bool] | None = None,
     ) -> list[dict]:
         """素材过长时先逐段摘要、再汇总生成，避免超出模型上下文。"""
 
@@ -147,6 +157,7 @@ class NotePipeline:
         report("generate", f"素材较长（约 {len(text)} 字），分 {total} 段逐段总结…")
         summaries: list[str] = []
         for index, chunk in enumerate(chunks, start=1):
+            _raise_if_cancelled(cancel_callback)
             report("generate", f"正在分块总结第 {index}/{total} 段…")
             summaries.append(
                 client.complete(
@@ -214,6 +225,13 @@ class NotePipeline:
         )
         sections = [NoteSection(heading="", body=note_body)]
         return NoteDocument(frontmatter=frontmatter, sections=sections, raw_transcript_ref=raw_ref)
+
+
+def _raise_if_cancelled(cancel_callback: Callable[[], bool] | None) -> None:
+    """调用方请求取消时抛出，用于 SSE 断连等场景提前结束。"""
+
+    if cancel_callback and cancel_callback():
+        raise GenerationCancelledError("生成已取消")
 
 
 def _format_ts(seconds: float) -> str:

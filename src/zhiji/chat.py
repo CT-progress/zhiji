@@ -211,11 +211,11 @@ def build_chat_messages(conversation: Conversation, source_context: str | None =
     return [{"role": "system", "content": system}, *recent]
 
 
-def fetch_link_context(message: str) -> str | None:
-    """提取消息中的知记支持链接，返回供模型使用的正文上下文。
-    
-    聊天模式下只返回链接信息，不阻塞在 Playwright 上。
-    笔记生成模式由 pipeline 直接调用 adapter.fetch()。
+def extract_supported_links(message: str) -> str | None:
+    """提取消息里受支持的链接，返回「链接 + 平台」提示文本。
+
+    聊天模式下只做链接识别、不发起网络请求（笔记生成模式由 pipeline 调用
+    ``adapter.fetch()``），因此函数名不提 fetch，避免语义误导。
     """
     blocks: list[str] = []
     seen: set[str] = set()

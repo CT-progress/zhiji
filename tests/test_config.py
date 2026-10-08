@@ -1,3 +1,4 @@
+from zhiji import config as config_module
 from zhiji.config import ConfigManager
 from zhiji.errors import ConfigError
 from zhiji.models import LLMModelConfig
@@ -49,3 +50,14 @@ def test_public_config_masks_keys(tmp_path):
     cm.add_model(LLMModelConfig(name="A", api_key="sk-1234567890"))
     payload = cm.public_config()
     assert payload["models"][0]["api_key"] == "sk-1****7890"
+
+def test_default_config_path_env_relative_to_project(monkeypatch):
+    monkeypatch.setenv("ZHIJI_CONFIG", "config/zhiji.json")
+    path = config_module.default_config_path()
+    assert path == config_module.PROJECT_ROOT / "config" / "zhiji.json"
+
+
+def test_default_config_path_env_absolute(monkeypatch, tmp_path):
+    target = tmp_path / "custom.json"
+    monkeypatch.setenv("ZHIJI_CONFIG", str(target))
+    assert config_module.default_config_path() == target

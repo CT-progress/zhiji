@@ -4,11 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from zhiji.config import PROJECT_ROOT
 from zhiji.errors import TranscriptMissingError
 from zhiji.models import AppSettings, ContentBundle, ContentType, TranscriptSegment
-
-_TMP_AUDIO = PROJECT_ROOT / ".tmp" / "audio"
+from zhiji.tmpfiles import ensure_audio_dir, remove_quietly, sweep_stale_audio
 
 
 def ensure_segments(
@@ -70,8 +68,8 @@ def transcribe_url(url: str, settings: AppSettings) -> list[TranscriptSegment]:
     except ImportError as exc:
         raise TranscriptMissingError("未安装 yt-dlp", hint="请安装项目依赖") from exc
 
-    _TMP_AUDIO.mkdir(parents=True, exist_ok=True)
-    output_template = str(_TMP_AUDIO / "%(id)s.%(ext)s")
+    sweep_stale_audio()
+    output_template = str(ensure_audio_dir() / "%(id)s.%(ext)s")
     options = {
         "format": "bestaudio/best",
         "outtmpl": output_template,
@@ -86,10 +84,9 @@ def transcribe_url(url: str, settings: AppSettings) -> list[TranscriptSegment]:
     except Exception as exc:
         raise TranscriptMissingError(f"音频下载失败: {exc}") from exc
 
-    segments = transcribe_file(audio_path, settings)
-    if not settings.keep_audio:
-        try:
-            audio_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-    return segments
+    try:
+        return transcribe_file(audio_path, settings)
+    finally:
+        # 无论转写成功还是抛错都清理音频，避免 .tmp/audio 持续膨胀
+        if not settings.keep_audio:
+            remove_quietly(audio_path)

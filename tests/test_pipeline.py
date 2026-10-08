@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import pytest
+
 from zhiji.config import ConfigManager
+from zhiji.errors import GenerationCancelledError
 from zhiji.llm.prompts import CHUNK_SIZE, CHUNK_THRESHOLD, needs_chunking, split_text
 from zhiji.models import (
     ContentBundle,
@@ -96,3 +99,55 @@ def test_markdown_filename_uses_local_date(tmp_path):
 
     today = datetime.now().astimezone().strftime("%Y-%m-%d")
     assert receipt.note_path.name.startswith(today)
+
+
+def test_run_honours_cancel_callback(tmp_path):
+    pipeline = NotePipeline(ConfigManager(tmp_path / "zhiji.json"))
+    with pytest.raises(GenerationCancelledError):
+        pipeline.run(
+            "https://www.bilibili.com/video/BV1xx411c7mD",
+            cancel_callback=lambda: True,
+        )
+
+
+def test_chunk_summary_stops_when_cancelled(tmp_path):
+    pipeline = NotePipeline(ConfigManager(tmp_path / "zhiji.json"))
+    client = _StubClient()
+    calls = {"n": 0}
+
+    def cancel() -> bool:
+        calls["n"] += 1
+        return calls["n"] > 1  # 第一段正常总结，第二段前被取消
+
+    text = "长" * (CHUNK_THRESHOLD + 1)
+    with pytest.raises(GenerationCancelledError):
+        pipeline._build_generation_messages(client, _bundle(), text, lambda *_a: None, cancel)
+    assert len(client.calls) == 1
+
+
+def test_markdown_writer_avoids_overwrite(tmp_path):
+    created = datetime.now().astimezone().isoformat(timespec="seconds")
+
+    def make_note() -> NoteDocument:
+        return NoteDocument(
+            frontmatter=NoteFrontmatter(
+                title="标题",
+                source="https://example.com",
+                platform="zhihu",
+                content_type="article",
+                created=created,
+            ),
+            sections=[NoteSection(heading="", body="正文")],
+            raw_transcript_ref="artifacts/zhihu_1/transcript.json",
+        )
+
+    writer = MarkdownWriter()
+    first = writer.write(make_note(), tmp_path, tmp_path)
+    second = writer.write(make_note(), tmp_path, tmp_path)
+    third = writer.write(make_note(), tmp_path, tmp_path)
+
+    assert first.note_path == tmp_path / first.note_path.name
+    assert second.note_path.name.endswith("-2.md")
+    assert third.note_path.name.endswith("-3.md")
+    assert len({first.note_path, second.note_path, third.note_path}) == 3
+    assert all(path.exists() for path in (first.note_path, second.note_path, third.note_path))

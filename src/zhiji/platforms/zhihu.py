@@ -17,6 +17,7 @@ import hashlib
 import json
 import random
 import re
+import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -36,6 +37,8 @@ _RISK_CODES = {40352, 40362}
 _ZSE93 = "101_3_3.0"
 _MIN_BODY_LENGTH = 50
 _LAST_REQUEST_AT = 0.0
+#: 串行化限速：保证「请求之间不并发、带随机延时」的承诺在 Web 并发下也成立。
+_THROTTLE_LOCK = threading.Lock()
 
 
 class ZhihuRiskError(PlatformFetchError):
@@ -391,14 +394,19 @@ def _store_cache(path: Path, bundle: ContentBundle) -> None:
 
 
 def _throttle() -> None:
-    """请求间随机延时（1~2.5s），降低触发风控的概率。"""
+    """请求间随机延时（1~2.5s），降低触发风控的概率。
+
+    持锁覆盖 ``sleep``，使并发调用被串行化成顺序请求；否则多个线程会同时
+    读到旧的 ``_LAST_REQUEST_AT``，延时形同虚设。
+    """
 
     global _LAST_REQUEST_AT
-    delay = random.uniform(1.0, 2.5)
-    elapsed = time.monotonic() - _LAST_REQUEST_AT
-    if elapsed < delay:
-        time.sleep(delay - elapsed)
-    _LAST_REQUEST_AT = time.monotonic()
+    with _THROTTLE_LOCK:
+        delay = random.uniform(1.0, 2.5)
+        elapsed = time.monotonic() - _LAST_REQUEST_AT
+        if elapsed < delay:
+            time.sleep(delay - elapsed)
+        _LAST_REQUEST_AT = time.monotonic()
 
 
 def _browser_family(user_agent: str) -> str:

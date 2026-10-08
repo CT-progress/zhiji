@@ -19,7 +19,7 @@ class MarkdownWriter:
         # 与 frontmatter.created 一致：都基于带本地时区的当前时间
         today = datetime.now().astimezone().strftime("%Y-%m-%d")
         filename = f"{today} - {_safe_filename(author)} - {safe_title}.md"
-        target = output_dir / filename
+        target = _unique_path(output_dir / filename)
         try:
             target.write_text(render_note(note), encoding="utf-8")
         except OSError as exc:
@@ -76,6 +76,19 @@ def render_note(note: NoteDocument) -> str:
         sort_keys=False,
     )
     return "---\n" + yaml_text + "---\n\n" + "\n".join(body)
+
+
+def _unique_path(target: Path) -> Path:
+    """同名文件已存在时追加 -2 / -3 …，避免静默覆盖已有笔记。"""
+
+    if not target.exists():
+        return target
+    index = 2
+    while True:
+        candidate = target.with_name(f"{target.stem}-{index}{target.suffix}")
+        if not candidate.exists():
+            return candidate
+        index += 1
 
 
 def _safe_filename(value: str) -> str:

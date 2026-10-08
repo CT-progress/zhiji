@@ -18,7 +18,9 @@ load_dotenv(PROJECT_ROOT / ".env")
 def default_config_path() -> Path:
     env_path = os.getenv("ZHIJI_CONFIG")
     if env_path:
-        return Path(env_path).expanduser()
+        path = Path(env_path).expanduser()
+        # 相对路径统一以项目根目录为基准，避免受启动时工作目录影响
+        return path if path.is_absolute() else PROJECT_ROOT / path
     return PROJECT_ROOT / "config" / "zhiji.json"
 
 

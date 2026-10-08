@@ -43,6 +43,12 @@ class ConfigError(ZhijiError):
     code = "CONFIG_ERROR"
 
 
+class GenerationCancelledError(ZhijiError):
+    """调用方主动取消（如 SSE 断连）导致的生成中断，不算失败。"""
+
+    code = "GENERATION_CANCELLED"
+
+
 def error_response(exc: Exception) -> dict:
     """把异常转成统一的 API / CLI 错误结构。"""
 

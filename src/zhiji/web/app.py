@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import queue
 import re
@@ -19,14 +20,26 @@ from zhiji.chat import (
     ChatStore,
     Conversation,
     build_chat_messages,
-    fetch_link_context,
+    extract_supported_links,
 )
 from zhiji.config import ConfigManager, mask_api_key
-from zhiji.errors import ConfigError, LLMError, ZhijiError, error_response
+from zhiji.errors import ConfigError, GenerationCancelledError, LLMError, ZhijiError, error_response
 from zhiji.llm.client import LLMClient
 from zhiji.models import LLMModelConfig
 
 CONFIG_HTML = Path(__file__).resolve().parent / "static" / "config.html"
+
+# 异步生成器轮询队列超时的哨兵值（区别于队列里的 None 结束标记）
+_QUEUE_EMPTY = object()
+
+
+def _queue_get(q: queue.Queue, timeout: float):
+    """带超时地取队列；超时返回哨兵，便于 async 生成器之间穿插断连检查。"""
+
+    try:
+        return q.get(timeout=timeout)
+    except queue.Empty:
+        return _QUEUE_EMPTY
 
 
 class CreateConversationRequest(BaseModel):
@@ -240,17 +253,19 @@ def create_app(
         return {"ok": True, "path": str(path)}
 
     @app.post("/api/note/generate/stream")
-    def generate_note_stream(payload: dict) -> StreamingResponse:
+    def generate_note_stream(payload: dict, request: Request) -> StreamingResponse:
         url = (payload.get("url") or "").strip()
         model_name = payload.get("model")
         conversation_id = payload.get("conversation_id")
         if not url:
             raise HTTPException(status_code=400, detail="URL 不能为空")
 
-        def event_source():
+        async def event_source():
             from zhiji.pipeline import NotePipeline
 
             events: queue.Queue = queue.Queue()
+            cancelled = threading.Event()
+            loop = asyncio.get_running_loop()
 
             def work() -> None:
                 try:
@@ -262,6 +277,7 @@ def create_app(
                         progress_callback=lambda stage, message, status="start": events.put(
                             {"stage": stage, "status": status, "message": message}
                         ),
+                        cancel_callback=cancelled.is_set,
                     )
                     markdown = receipt.note_path.read_text(encoding="utf-8")
                     note_body = _strip_frontmatter(markdown)
@@ -295,17 +311,29 @@ def create_app(
                         "conversation": _conv_public(conversation),
                         "warnings": receipt.warnings,
                     })
+                except GenerationCancelledError:
+                    # 客户端已断连，生成的中间态无需回传
+                    pass
                 except Exception as exc:  # noqa: BLE001
                     events.put({"error": error_response(exc)["error"]})
                 finally:
                     events.put(None)
 
             threading.Thread(target=work, daemon=True).start()
-            while True:
-                item = events.get()
-                if item is None:
-                    break
-                yield _sse(item)
+            try:
+                while True:
+                    if await request.is_disconnected():
+                        cancelled.set()
+                        break
+                    item = await loop.run_in_executor(None, _queue_get, events, 0.5)
+                    if item is _QUEUE_EMPTY:
+                        continue
+                    if item is None:
+                        break
+                    yield _sse(item)
+            finally:
+                # 生成器被提前关闭（客户端断开）时，通知后台线程尽早停止
+                cancelled.set()
 
         return StreamingResponse(
             event_source(),
@@ -453,7 +481,7 @@ def create_app(
         model = _resolve_model(config, payload.model_name)
         store.update(conversation_id, model_name=model.name)
         message = payload.message.strip()
-        source_context = fetch_link_context(message)
+        source_context = extract_supported_links(message)
         store.append_message(conversation_id, "user", message)
         conversation = store.get(conversation_id)
         reply = LLMClient(model).complete(build_chat_messages(conversation, source_context))
@@ -461,29 +489,57 @@ def create_app(
         return {"reply": reply, "conversation": _conv_public(conversation)}
 
     @app.post("/api/chat/stream")
-    def chat_stream(payload: ChatRequest) -> StreamingResponse:
+    def chat_stream(payload: ChatRequest, request: Request) -> StreamingResponse:
         conversation_id = payload.conversation_id
         _get_or_404(store, conversation_id)
         model = _resolve_model(config, payload.model_name)
         store.update(conversation_id, model_name=model.name)
         message = payload.message.strip()
-        source_context = fetch_link_context(message)
+        source_context = extract_supported_links(message)
         store.append_message(conversation_id, "user", message)
         messages = build_chat_messages(store.get(conversation_id), source_context)
-        collected: list[str] = []
 
-        def event_source():
-            yield _sse({"meta": {"conversation_id": conversation_id, "model": model.name}})
+        async def event_source():
+            events: queue.Queue = queue.Queue()
+            cancelled = threading.Event()
+            loop = asyncio.get_running_loop()
+
+            def work() -> None:
+                collected: list[str] = []
+                try:
+                    events.put({"meta": {"conversation_id": conversation_id, "model": model.name}})
+                    for chunk in LLMClient(model).stream_chunks(messages):
+                        if cancelled.is_set():
+                            break
+                        collected.append(chunk)
+                        events.put({"delta": chunk})
+                except ZhijiError as exc:
+                    events.put({"error": error_response(exc)["error"]})
+                except Exception as exc:  # noqa: BLE001
+                    events.put({"error": error_response(exc)["error"]})
+                finally:
+                    if collected:
+                        store.append_message(conversation_id, "assistant", "".join(collected))
+                    events.put({
+                        "done": True,
+                        "conversation": _conv_public(store.get(conversation_id)),
+                    })
+                    events.put(None)
+
+            threading.Thread(target=work, daemon=True).start()
             try:
-                for chunk in LLMClient(model).stream_chunks(messages):
-                    collected.append(chunk)
-                    yield _sse({"delta": chunk})
-            except ZhijiError as exc:
-                yield _sse({"error": error_response(exc)["error"]})
+                while True:
+                    if await request.is_disconnected():
+                        cancelled.set()
+                        break
+                    item = await loop.run_in_executor(None, _queue_get, events, 0.5)
+                    if item is _QUEUE_EMPTY:
+                        continue
+                    if item is None:
+                        break
+                    yield _sse(item)
             finally:
-                if collected:
-                    store.append_message(conversation_id, "assistant", "".join(collected))
-                yield _sse({"done": True, "conversation": _conv_public(store.get(conversation_id))})
+                cancelled.set()
 
         return StreamingResponse(
             event_source(),

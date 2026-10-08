@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from uuid import uuid4
@@ -21,6 +20,7 @@ from zhiji.models import (
     TranscriptSegment,
 )
 from zhiji.platforms.base import PlatformAdapter
+from zhiji.tmpfiles import ensure_audio_dir, remove_quietly, sweep_stale_audio
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
@@ -188,10 +188,9 @@ class DouyinAdapter(PlatformAdapter):
             if audio_urls:
                 report("下载音频…")
                 try:
-                    tmp_dir = Path(tempfile.gettempdir()) / "zhiji_audio"
-                    tmp_dir.mkdir(parents=True, exist_ok=True)
+                    sweep_stale_audio()
                     # 每次用唯一文件名，避免并发请求互相覆盖
-                    downloaded_audio = tmp_dir / f"douyin_{uuid4().hex}.mp3"
+                    downloaded_audio = ensure_audio_dir() / f"douyin_{uuid4().hex}.mp3"
                     with httpx.Client(timeout=60, follow_redirects=True) as client:
                         resp = client.get(
                             audio_urls[0],
@@ -209,10 +208,7 @@ class DouyinAdapter(PlatformAdapter):
                 segments = self._transcribe_audio(downloaded_audio, settings)
                 report(f"转写完成，共 {len(segments)} 段")
                 if not settings.keep_audio:
-                    try:
-                        downloaded_audio.unlink(missing_ok=True)
-                    except OSError:
-                        pass
+                    remove_quietly(downloaded_audio)
 
             # 构造返回数据
             raw_data = {
