@@ -72,6 +72,7 @@ class DouyinAdapter(PlatformAdapter):
         """用 Playwright 渲染页面，拦截网络请求获取音频 URL。"""
         report = report or (lambda _msg: None)
         try:
+            from playwright.sync_api import Error as PlaywrightError
             from playwright.sync_api import sync_playwright
         except ImportError as exc:
             raise PlatformFetchError(
@@ -92,12 +93,10 @@ class DouyinAdapter(PlatformAdapter):
         def handle_response(response):
             url = response.url
             # 拦截音视频流
-            if "media-audio" in url or "audio" in url.lower():
-                if url not in audio_urls:
-                    audio_urls.append(url)
-            elif "media-video" in url or "douyinvod.com" in url:
-                if url not in video_urls:
-                    video_urls.append(url)
+            if ("media-audio" in url or "audio" in url.lower()) and url not in audio_urls:
+                audio_urls.append(url)
+            elif ("media-video" in url or "douyinvod.com" in url) and url not in video_urls:
+                video_urls.append(url)
 
         try:
             with sync_playwright() as p:
@@ -155,7 +154,8 @@ class DouyinAdapter(PlatformAdapter):
                         author_match = re.search(r'[-–]\s*(.+?)\s*于\d{8}发布', meta_desc)
                         if author_match:
                             author = author_match.group(1).strip()
-                except Exception:
+                except PlaywrightError:
+                    # 页面结构可能变化，元数据缺失时回退为空值
                     pass
 
                 if not title:
@@ -163,7 +163,8 @@ class DouyinAdapter(PlatformAdapter):
                         og_title = page.locator('meta[property="og:title"]').get_attribute("content")
                         if og_title:
                             title = og_title
-                    except Exception:
+                    except PlaywrightError:
+                        # og:title 缺失时回退到页面标题
                         pass
 
                 if not title:
@@ -175,7 +176,8 @@ class DouyinAdapter(PlatformAdapter):
                     for c in context.cookies():
                         if ".douyin.com" in c.get("domain", ""):
                             page_cookies[c["name"]] = c["value"]
-                except Exception:
+                except PlaywrightError:
+                    # Cookie 收割失败时继续，后续仍可用页面文本
                     pass
 
                 browser.close()
@@ -282,6 +284,7 @@ class DouyinAdapter(PlatformAdapter):
 def login_with_browser() -> None:
     """打开浏览器让用户手动登录抖音，然后从浏览器收割 Cookie。"""
     try:
+        from playwright.sync_api import Error as PlaywrightError
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
         raise PlatformFetchError(
@@ -302,7 +305,8 @@ def login_with_browser() -> None:
         # 等待用户登录并关闭浏览器
         try:
             page.wait_for_event("close", timeout=600000)
-        except Exception:
+        except PlaywrightError:
+            # 等待超时或页面关闭即视为登录流程结束
             pass
 
         # 收割 Cookie

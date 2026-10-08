@@ -10,7 +10,14 @@ from pathlib import Path
 from zhiji.config import ConfigManager
 from zhiji.errors import ConfigError, LLMError
 from zhiji.llm.client import LLMClient
-from zhiji.llm.prompts import build_note_messages, sanitize_note_markdown
+from zhiji.llm.prompts import (
+    build_chunk_summary_messages,
+    build_note_messages,
+    build_reduce_messages,
+    needs_chunking,
+    sanitize_note_markdown,
+    split_text,
+)
 from zhiji.models import (
     ContentBundle,
     ContentType,
@@ -100,7 +107,8 @@ class NotePipeline:
 
         report("generate", "AI 正在生成笔记…")
         client = LLMClient(model)
-        messages = build_note_messages(bundle.metadata, bundle.plain_text())
+        text = bundle.plain_text()
+        messages = self._build_generation_messages(client, bundle, text, report)
 
         # 流式输出 or 普通输出
         if stream_callback:
@@ -122,6 +130,31 @@ class NotePipeline:
         receipt.warnings.extend(warnings)
         report("save", "笔记已保存", "ok")
         return receipt
+
+    def _build_generation_messages(
+        self,
+        client: LLMClient,
+        bundle: ContentBundle,
+        text: str,
+        report: Callable[[str, str, str], None],
+    ) -> list[dict]:
+        """素材过长时先逐段摘要、再汇总生成，避免超出模型上下文。"""
+
+        if not needs_chunking(text):
+            return build_note_messages(bundle.metadata, text)
+        chunks = split_text(text)
+        total = len(chunks)
+        report("generate", f"素材较长（约 {len(text)} 字），分 {total} 段逐段总结…")
+        summaries: list[str] = []
+        for index, chunk in enumerate(chunks, start=1):
+            report("generate", f"正在分块总结第 {index}/{total} 段…")
+            summaries.append(
+                client.complete(
+                    build_chunk_summary_messages(bundle.metadata, chunk, index, total)
+                )
+            )
+        report("generate", "分块总结完成，正在汇总生成笔记…")
+        return build_reduce_messages(bundle.metadata, summaries)
 
     def search(
         self,

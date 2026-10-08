@@ -75,9 +75,16 @@ class ConfigManager:
     def update_model(self, name: str, data: dict) -> LLMModelConfig:
         index = self._index_of(name)
         current = self._config.models[index]
-        if "name" in data and data["name"] != name:
-            if any(old.name == data["name"] for idx, old in enumerate(self._config.models) if idx != index):
-                raise ConfigError(f"模型名称已存在: {data['name']}")
+        if (
+            "name" in data
+            and data["name"] != name
+            and any(
+                old.name == data["name"]
+                for idx, old in enumerate(self._config.models)
+                if idx != index
+            )
+        ):
+            raise ConfigError(f"模型名称已存在: {data['name']}")
         try:
             updated = current.model_copy(update=data)
         except ValidationError as exc:

@@ -7,6 +7,20 @@ import re
 
 from zhiji.models import Metadata
 
+#: 单次请求直接喂给模型的原文上限（字符）
+_MAX_SOURCE_TEXT = 30000
+#: 超过该长度即启用“分块摘要 → 汇总生成”的 map-reduce 流程
+CHUNK_THRESHOLD = 24000
+#: 每个分块的字符数
+CHUNK_SIZE = 12000
+
+_CHUNK_SYSTEM_PROMPT = (
+    "你是知识内容整理助手。用户会给出一份较长素材的第 {index}/{total} 段，"
+    "请用中文提炼这一段的全部关键信息：核心论点、论据、案例、数据、步骤、术语，"
+    "尽量保留具体细节，不要因为追求简短而丢失信息，也不要编造原文没有的内容。"
+    "只输出该段的要点摘要（Markdown 列表或短段落），不要输出任何开头语或结束语。"
+)
+
 _SYSTEM_PROMPT = (
     "你是资深知识笔记整理助手。你会收到一段来自视频字幕或图文正文的素材，"
     "请把它整理成一篇详尽、结构清晰、忠于原文的中文 Markdown 笔记正文。\n"
@@ -49,16 +63,70 @@ _SYSTEM_PROMPT = (
 )
 
 
-def build_note_messages(metadata: Metadata, text: str) -> list[dict]:
-    meta_payload = {
+def _meta_payload(metadata: Metadata) -> dict:
+    return {
         "title": metadata.title,
         "author": metadata.author,
         "published_at": metadata.published_at.isoformat() if metadata.published_at else None,
         "tags": metadata.tags,
     }
+
+
+def needs_chunking(text: str) -> bool:
+    """素材是否长到需要先分块摘要。"""
+
+    return len(text) > CHUNK_THRESHOLD
+
+
+def split_text(text: str, size: int = CHUNK_SIZE) -> list[str]:
+    """按固定长度切分文本；size <= 0 时原样返回单块。"""
+
+    if size <= 0:
+        return [text]
+    return [text[i : i + size] for i in range(0, len(text), size)]
+
+
+def build_chunk_summary_messages(
+    metadata: Metadata, chunk: str, index: int, total: int
+) -> list[dict]:
+    """构造“对第 index/total 段做摘要”的 messages（map 阶段）。"""
+
     user_payload = {
-        "metadata": meta_payload,
-        "source_text": text[:30000],
+        "metadata": _meta_payload(metadata),
+        "chunk_index": index,
+        "chunk_total": total,
+        "source_chunk": chunk,
+    }
+    return [
+        {"role": "system", "content": _CHUNK_SYSTEM_PROMPT.format(index=index, total=total)},
+        {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False, indent=2)},
+    ]
+
+
+def build_reduce_messages(metadata: Metadata, summaries: list[str]) -> list[dict]:
+    """把各分块摘要汇总成最终笔记输入（reduce 阶段）。"""
+
+    combined = "\n\n".join(
+        f"### 第 {i} 段摘要\n{summary}" for i, summary in enumerate(summaries, start=1)
+    )
+    user_payload = {
+        "metadata": _meta_payload(metadata),
+        "note": (
+            "以上长素材已被切分为多段并逐段摘要。请严格依据这些分段摘要，"
+            "合并还原成一篇结构完整、细节充分的中文 Markdown 笔记正文。"
+        ),
+        "chunk_summaries": combined,
+    }
+    return [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False, indent=2)},
+    ]
+
+
+def build_note_messages(metadata: Metadata, text: str) -> list[dict]:
+    user_payload = {
+        "metadata": _meta_payload(metadata),
+        "source_text": text[:_MAX_SOURCE_TEXT],
     }
     return [
         {"role": "system", "content": _SYSTEM_PROMPT},
@@ -75,7 +143,7 @@ def sanitize_note_markdown(content: str) -> str:
     lines = text.splitlines()
     while lines:
         first = lines[0].strip()
-        if not first or first.startswith("# ") or first.startswith("> 来源"):
+        if not first or first.startswith(("# ", "> 来源")):
             lines.pop(0)
             continue
         break

@@ -16,7 +16,9 @@ class MarkdownWriter:
     def write(self, note: NoteDocument, output_dir: Path, artifact_dir: Path) -> OutputReceipt:
         safe_title = _safe_filename(note.frontmatter.title)
         author = note.frontmatter.author or "未知作者"
-        filename = f"{datetime.now():%Y-%m-%d} - {_safe_filename(author)} - {safe_title}.md"
+        # 与 frontmatter.created 一致：都基于带本地时区的当前时间
+        today = datetime.now().astimezone().strftime("%Y-%m-%d")
+        filename = f"{today} - {_safe_filename(author)} - {safe_title}.md"
         target = output_dir / filename
         try:
             target.write_text(render_note(note), encoding="utf-8")

@@ -230,7 +230,7 @@ def fetch_link_context(message: str) -> str | None:
             continue
         # 聊天模式：只返回链接信息，不调用 adapter.fetch()
         # 这样不会因为 Playwright 超时而卡住
-        blocks.append("链接：%s\n平台：%s" % (url, adapter.platform.value))
+        blocks.append(f"链接：{url}\n平台：{adapter.platform.value}")
     return "\n\n".join(blocks) or None
 
 

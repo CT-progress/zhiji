@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json as _json
 import os
-from typing import Iterable
+from collections.abc import Iterable
 
 import httpx
 
@@ -87,22 +87,24 @@ class LLMClient:
             payload["response_format"] = response_format
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         try:
-            with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
-                with client.stream("POST", self._endpoint(), json=payload, headers=headers) as response:
-                    if response.status_code >= 400:
-                        body = response.read().decode("utf-8", errors="replace")
-                        raise LLMError(f"LLM 接口返回 {response.status_code}: {body[:200]}")
-                    for line in response.iter_lines():
-                        if not line or not line.startswith("data:"):
-                            continue
-                        data = line[5:].strip()
-                        if data == "[DONE]":
-                            break
-                        try:
-                            delta = _json.loads(data)["choices"][0]["delta"].get("content", "")
-                        except (KeyError, IndexError, _json.JSONDecodeError):
-                            continue
-                        if delta:
-                            yield delta
+            with (
+                httpx.Client(timeout=self.timeout, follow_redirects=True) as client,
+                client.stream("POST", self._endpoint(), json=payload, headers=headers) as response,
+            ):
+                if response.status_code >= 400:
+                    body = response.read().decode("utf-8", errors="replace")
+                    raise LLMError(f"LLM 接口返回 {response.status_code}: {body[:200]}")
+                for line in response.iter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        delta = _json.loads(data)["choices"][0]["delta"].get("content", "")
+                    except (KeyError, IndexError, _json.JSONDecodeError):
+                        continue
+                    if delta:
+                        yield delta
         except httpx.HTTPError as exc:
             raise LLMError(f"无法连接 LLM 服务: {exc}") from exc
