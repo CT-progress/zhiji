@@ -145,7 +145,7 @@ class NotePipeline:
         client: LLMClient,
         bundle: ContentBundle,
         text: str,
-        report: Callable[[str, str, str], None],
+        report: Callable[[str, str], None],
         cancel_callback: Callable[[], bool] | None = None,
     ) -> list[dict]:
         """素材过长时先逐段摘要、再汇总生成，避免超出模型上下文。"""

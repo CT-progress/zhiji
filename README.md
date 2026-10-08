@@ -82,7 +82,11 @@ tests/                   # pytest 测试
 ```powershell
 pytest               # 运行测试
 ruff check src tests # 代码检查
+mypy                 # 类型检查（配置见 pyproject.toml 的 [tool.mypy]）
 ```
+
+提交 / PR 会触发 GitHub Actions（`.github/workflows/ci.yml`），在
+Ubuntu 与 Windows 上按 Python 3.11 / 3.12 跑 ruff、mypy、pytest 三件套。
 
 ## 隐私与安全
 

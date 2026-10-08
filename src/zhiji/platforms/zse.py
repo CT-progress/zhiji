@@ -608,11 +608,11 @@ class ZSECipher:
             prev_block = chunk
 
         # Remove padding and validate
-        plain = self._pkcs7_unpad(bytes(plain))
+        unpadded = self._pkcs7_unpad(bytes(plain))
 
-        if len(plain) < 2 or plain[1] != 0:
+        if len(unpadded) < 2 or unpadded[1] != 0:
             raise ValueError("Invalid plaintext header")
 
         # Decode URI component
-        raw = self._decode_uri_component(plain[2:])
+        raw = self._decode_uri_component(unpadded[2:])
         return raw.decode("utf-8")

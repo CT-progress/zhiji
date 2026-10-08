@@ -267,16 +267,20 @@ def create_app(
             cancelled = threading.Event()
             loop = asyncio.get_running_loop()
 
+            def on_delta(chunk: str) -> None:
+                events.put({"delta": chunk})
+
+            def on_progress(stage: str, message: str, status: str = "start") -> None:
+                events.put({"stage": stage, "status": status, "message": message})
+
             def work() -> None:
                 try:
                     pipeline = NotePipeline(config)
                     receipt = pipeline.run(
                         url,
                         model_name=model_name,
-                        stream_callback=lambda chunk: events.put({"delta": chunk}),
-                        progress_callback=lambda stage, message, status="start": events.put(
-                            {"stage": stage, "status": status, "message": message}
-                        ),
+                        stream_callback=on_delta,
+                        progress_callback=on_progress,
                         cancel_callback=cancelled.is_set,
                     )
                     markdown = receipt.note_path.read_text(encoding="utf-8")

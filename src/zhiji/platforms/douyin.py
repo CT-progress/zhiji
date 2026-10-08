@@ -318,4 +318,4 @@ def login_with_browser() -> None:
     if not cookie_str:
         raise PlatformFetchError("未捕获到抖音 Cookie，登录可能未完成", platform="douyin")
 
-    return save_profile(cookie_str, _UA)
+    save_profile(cookie_str, _UA)
