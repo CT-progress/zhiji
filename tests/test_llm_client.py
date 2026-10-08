@@ -133,3 +133,56 @@ def test_stream_chunks_gives_up_after_retries(monkeypatch):
 
     with pytest.raises(LLMError):
         list(LLMClient(_model()).stream_chunks([{"role": "user", "content": "x"}]))
+
+
+class _FailingAfterFirstLine(_FakeStream):
+    def iter_lines(self):
+        yield 'data: {"choices":[{"delta":{"content":"hi"}}]}'
+        raise httpx.ReadError("stream interrupted")
+
+
+def test_stream_chunks_does_not_retry_after_first_delta(monkeypatch):
+    monkeypatch.setattr(client_module, "_sleep_backoff", lambda _attempt: None)
+    calls = {"n": 0}
+
+    def fake_stream(self, method, url, **kwargs):
+        calls["n"] += 1
+        return _FailingAfterFirstLine([])
+
+    monkeypatch.setattr(httpx.Client, "stream", fake_stream)
+
+    stream = LLMClient(_model()).stream_chunks([{"role": "user", "content": "x"}])
+    assert next(iter(stream)) == "hi"
+    with pytest.raises(LLMError):
+        next(stream)
+    assert calls["n"] == 1
+
+
+def test_stream_chunks_does_not_retry_non_retryable_status(monkeypatch):
+    monkeypatch.setattr(client_module, "_sleep_backoff", lambda _attempt: None)
+    calls = {"n": 0}
+
+    def fake_stream(self, method, url, **kwargs):
+        calls["n"] += 1
+        return _FakeStream([], status_code=400)
+
+    monkeypatch.setattr(httpx.Client, "stream", fake_stream)
+
+    with pytest.raises(LLMError):
+        list(LLMClient(_model()).stream_chunks([{"role": "user", "content": "x"}]))
+    assert calls["n"] == 1
+
+
+def test_stream_chunks_ignores_malformed_events(monkeypatch):
+    def fake_stream(self, method, url, **kwargs):
+        return _FakeStream([
+            "event: ping",
+            "data: not-json",
+            'data: {"choices":[]}',
+            'data: {"choices":[{"delta":{"content":"ok"}}]}',
+            "data: [DONE]",
+        ])
+
+    monkeypatch.setattr(httpx.Client, "stream", fake_stream)
+
+    assert list(LLMClient(_model()).stream_chunks([{"role": "user", "content": "x"}])) == ["ok"]

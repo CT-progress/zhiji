@@ -18,10 +18,14 @@ _RULES: list[tuple[tuple[str, ...], Platform]] = [
 ]
 
 
+def _host_matches(host: str, domain: str) -> bool:
+    return host == domain or host.endswith("." + domain)
+
+
 def detect_platform(url: str) -> Platform:
     host = (urlparse(url).hostname or "").lower()
     for domains, platform in _RULES:
-        if any(domain in host or host.endswith("." + domain) for domain in domains):
+        if any(_host_matches(host, domain) for domain in domains):
             return platform
     raise InputUnsupportedError(f"暂不支持该链接: {url}", hint="支持 B 站 / 知乎 / 抖音链接")
 

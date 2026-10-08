@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from zhiji.models import (
     AppSettings,
     ContentBundle,
@@ -172,3 +174,33 @@ def test_douyin_transcribe_uses_global_settings(monkeypatch, tmp_path):
 
     assert segments[0].text == "你好"
     assert captured["settings"].whisper_model == "base"
+
+
+def test_registry_supports_short_links_and_subdomains():
+    assert detect_platform("https://b23.tv/abc123") == Platform.BILIBILI
+    assert detect_platform("https://www.iesdouyin.com/share/video/123") == Platform.DOUYIN
+    assert detect_platform("https://ZHIHU.COM/question/123") == Platform.ZHIHU
+
+
+def test_registry_rejects_lookalike_domain():
+    from zhiji.errors import InputUnsupportedError
+
+    with pytest.raises(InputUnsupportedError):
+        detect_platform("https://evilbilibili.com/video/BV1xx411c7mD")
+
+
+def test_resolve_adapter_returns_platform_adapter():
+    from zhiji.platforms.registry import resolve_adapter
+
+    assert isinstance(resolve_adapter("https://www.bilibili.com/video/BV1xx411c7mD"), BilibiliAdapter)
+    assert isinstance(resolve_adapter("https://www.zhihu.com/question/123"), ZhihuAdapter)
+    assert isinstance(resolve_adapter("https://www.douyin.com/video/7123456789012345678"), DouyinAdapter)
+
+
+def test_adapter_rejects_unrecognised_urls():
+    from zhiji.errors import InputUnsupportedError
+
+    with pytest.raises(InputUnsupportedError):
+        BilibiliAdapter().parse_url("https://www.bilibili.com/read/cv123")
+    with pytest.raises(InputUnsupportedError):
+        DouyinAdapter().parse_url("https://www.douyin.com/user/abc")

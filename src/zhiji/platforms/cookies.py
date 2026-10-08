@@ -109,7 +109,7 @@ def load_cookie_profile(
             saved_at=str(data.get("saved_at", "")),
             verified=bool(data.get("verified", True)),
         )
-    except (OSError, ValueError, TypeError):
+    except (AttributeError, OSError, ValueError, TypeError):
         return None
     if require and require not in profile.cookie:
         return None
