@@ -25,6 +25,7 @@ from sqlalchemy import select
 from zhiji.errors import GenerationCancelledError, TaskTransitionError
 from zhiji.models import TaskStatus
 from zhiji.storage import Database, TaskRepository, get_database, lock_for_key
+from zhiji.storage.scope import ANY_USER, UserScope
 from zhiji.storage.tables import TaskRow
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,7 @@ class TaskContext:
         self.task_id = row.id
         self.task_type = row.type
         self.platform = row.platform
+        self.user_id = row.user_id
         self.payload: dict[str, Any] = json.loads(row.payload_json or "{}")
         self._database = database
         self._lock = lock
@@ -188,6 +190,7 @@ class TaskWorker:
         payload: dict[str, Any] | None = None,
         priority: int = 0,
         task_id: str | None = None,
+        user_id: str | None = None,
     ) -> str:
         """创建任务并唤醒 worker，立即返回 task id。
 
@@ -202,16 +205,17 @@ class TaskWorker:
                 payload=payload,
                 priority=priority,
                 task_id=task_id,
+                user_id=user_id,
             ).id
         self._wakeup.set()
         return new_id
 
-    def cancel(self, task_id: str) -> TaskRow:
+    def cancel(self, task_id: str, *, user_id: UserScope = ANY_USER) -> TaskRow:
         """把未结束的任务置为取消；终态任务不可取消。"""
 
         with self._lock, self.database.session_scope() as session:
             repo = TaskRepository(session)
-            row = repo.get(task_id)
+            row = repo.get(task_id, user_id=user_id)
             current = TaskStatus(row.status)
             if current.is_terminal():
                 raise TaskTransitionError(

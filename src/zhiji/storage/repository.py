@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from zhiji.errors import TaskNotFoundError, TaskTransitionError
 from zhiji.models import TASK_TRANSITIONS, TaskStatus
+from zhiji.storage.scope import ANY_USER, UserScope
 from zhiji.storage.tables import TaskRow
 
 TERMINAL_STATUSES = frozenset(
@@ -57,9 +58,11 @@ class TaskRepository:
         payload: dict[str, Any] | None = None,
         priority: int = 0,
         task_id: str | None = None,
+        user_id: str | None = None,
     ) -> TaskRow:
         row = TaskRow(
             id=task_id or str(uuid4()),
+            user_id=user_id,
             type=task_type,
             platform=platform,
             status=TaskStatus.PENDING.value,
@@ -70,11 +73,16 @@ class TaskRepository:
         self.session.flush()
         return row
 
-    def find(self, task_id: str) -> TaskRow | None:
-        return self.session.get(TaskRow, task_id)
+    def find(self, task_id: str, *, user_id: UserScope = ANY_USER) -> TaskRow | None:
+        stmt = select(TaskRow).where(TaskRow.id == task_id)
+        if user_id is None:
+            stmt = stmt.where(TaskRow.user_id.is_(None))
+        elif user_id is not ANY_USER:
+            stmt = stmt.where(TaskRow.user_id == user_id)
+        return self.session.scalars(stmt).first()
 
-    def get(self, task_id: str) -> TaskRow:
-        row = self.find(task_id)
+    def get(self, task_id: str, *, user_id: UserScope = ANY_USER) -> TaskRow:
+        row = self.find(task_id, user_id=user_id)
         if row is None:
             raise TaskNotFoundError(f"任务不存在: {task_id}")
         return row
@@ -86,8 +94,13 @@ class TaskRepository:
         platform: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        user_id: UserScope = ANY_USER,
     ) -> list[TaskRow]:
         stmt = select(TaskRow).order_by(TaskRow.created_at.desc(), TaskRow.id)
+        if user_id is None:
+            stmt = stmt.where(TaskRow.user_id.is_(None))
+        elif user_id is not ANY_USER:
+            stmt = stmt.where(TaskRow.user_id == user_id)
         if status is not None:
             stmt = stmt.where(TaskRow.status == TaskStatus(status).value)
         if platform is not None:

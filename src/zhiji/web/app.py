@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from zhiji.auth import SESSION_COOKIE_NAME, AuthService
 from zhiji.chat import (
     DEFAULT_TITLE,
+    JSON_BACKEND,
     ChatNotFoundError,
     ChatStore,
     Conversation,
@@ -43,6 +44,7 @@ from zhiji.errors import (
 from zhiji.llm.client import LLMClient
 from zhiji.models import LLMModelConfig, TaskStatus
 from zhiji.storage import TaskRepository
+from zhiji.storage.scope import ANY_USER, UserScope
 from zhiji.storage.tables import TaskRow, UserRow
 from zhiji.tasks import TaskContext, TaskWorker, get_worker
 
@@ -198,9 +200,11 @@ def _task_public(row: TaskRow) -> dict:
     }
 
 
-def _load_task(worker: TaskWorker, task_id: str) -> TaskRow:
+def _load_task(
+    worker: TaskWorker, task_id: str, *, user_id: UserScope = ANY_USER
+) -> TaskRow:
     with worker.database.session_scope() as session:
-        row = TaskRepository(session).find(task_id)
+        row = TaskRepository(session).find(task_id, user_id=user_id)
     if row is None:
         raise HTTPException(
             status_code=404,
@@ -213,9 +217,11 @@ def _http_error(status_code: int, exc: ZhijiError) -> HTTPException:
     return HTTPException(status_code=status_code, detail=error_response(exc))
 
 
-def _get_or_404(store: ChatStore, conversation_id: str) -> Conversation:
+def _get_or_404(
+    store: ChatStore, conversation_id: str, *, user_id: UserScope = ANY_USER
+) -> Conversation:
     try:
-        return store.get(conversation_id)
+        return store.get(conversation_id, user_id=user_id)
     except ChatNotFoundError as exc:
         raise HTTPException(status_code=404, detail=error_response(exc)) from exc
 
@@ -263,6 +269,11 @@ def create_app(
     task_worker = worker
     # 账号鉴权开关：显式参数优先，其次读取环境变量，默认关闭。
     require_auth = _env_flag(REQUIRE_AUTH_ENV) if require_auth is None else bool(require_auth)
+    if require_auth and store.backend_name == JSON_BACKEND:
+        raise ZhijiError(
+            "账号鉴权模式不支持 JSON 会话后端",
+            hint="请改用数据库后端（去掉 ZHIJI_CHAT_BACKEND=json），或关闭鉴权。",
+        )
 
     def _current_user(request: Request) -> UserRow | None:
         """解析当前登录用户；没有会话、验签失败或用户被禁用都返回 None。"""
@@ -275,11 +286,20 @@ def create_app(
             return None
         return auth.get_user(user_id)
 
+    def _scope_user(request: Request) -> str | None:
+        """当前请求的数据作用域：开启账号鉴权时返回用户 id，否则为本机默认作用域。"""
+
+        if not require_auth:
+            return None
+        user = _current_user(request)
+        return user.id if user else None
+
     def _generate_note_result(
         *,
         url: str,
         model_name: str | None,
         conversation_id: str | None,
+        user_id: str | None = None,
         on_delta: Callable[[str], None] | None,
         on_progress: Callable[[str, str, str], None] | None,
         cancel_callback: Callable[[], bool] | None,
@@ -298,9 +318,10 @@ def create_app(
         markdown = receipt.note_path.read_text(encoding="utf-8")
         note_body = _strip_frontmatter(markdown)
         if conversation_id:
-            _get_or_404(store, conversation_id)
+            _get_or_404(store, conversation_id, user_id=user_id)
             conversation = store.attach_note(
                 conversation_id,
+                user_id=user_id,
                 platform=receipt.platform,
                 source_url=url,
                 note_content=note_body,
@@ -308,9 +329,12 @@ def create_app(
                 title=receipt.title,
             )
         else:
-            conversation = store.create(title=(receipt.title or DEFAULT_TITLE)[:60])
+            conversation = store.create(
+                title=(receipt.title or DEFAULT_TITLE)[:60], user_id=user_id
+            )
             conversation = store.attach_note(
                 conversation.id,
+                user_id=user_id,
                 platform=receipt.platform,
                 source_url=url,
                 note_content=note_body,
@@ -372,6 +396,7 @@ def create_app(
             url=url,
             model_name=str(model_name) if model_name else None,
             conversation_id=str(conversation_id) if conversation_id else None,
+            user_id=context.user_id,
             on_delta=on_delta,
             on_progress=on_progress,
             cancel_callback=context.is_cancelled,
@@ -528,29 +553,55 @@ def create_app(
         return config.update_settings(data).model_dump(mode="json")
 
     @app.get("/api/conversations")
-    def list_conversations() -> dict:
-        return {"conversations": [_conv_summary(c) for c in store.list()]}
+    def list_conversations(request: Request) -> dict:
+        scope = _scope_user(request)
+        return {"conversations": [_conv_summary(c) for c in store.list(user_id=scope)]}
 
     @app.post("/api/conversations")
-    def create_conversation(payload: CreateConversationRequest) -> dict:
-        return {"conversation": _conv_public(store.create(payload.title or DEFAULT_TITLE, payload.model_name))}
+    def create_conversation(payload: CreateConversationRequest, request: Request) -> dict:
+        scope = _scope_user(request)
+        return {
+            "conversation": _conv_public(
+                store.create(payload.title or DEFAULT_TITLE, payload.model_name, user_id=scope)
+            )
+        }
 
     @app.get("/api/conversations/{conversation_id}")
-    def get_conversation(conversation_id: str) -> dict:
-        return {"conversation": _conv_public(_get_or_404(store, conversation_id))}
+    def get_conversation(conversation_id: str, request: Request) -> dict:
+        scope = _scope_user(request)
+        return {
+            "conversation": _conv_public(
+                _get_or_404(store, conversation_id, user_id=scope)
+            )
+        }
 
     @app.patch("/api/conversations/{conversation_id}")
-    def update_conversation(conversation_id: str, payload: UpdateConversationRequest) -> dict:
-        return {"conversation": _conv_public(store.update(conversation_id, title=payload.title, model_name=payload.model_name))}
+    def update_conversation(
+        conversation_id: str, payload: UpdateConversationRequest, request: Request
+    ) -> dict:
+        scope = _scope_user(request)
+        _get_or_404(store, conversation_id, user_id=scope)
+        return {
+            "conversation": _conv_public(
+                store.update(
+                    conversation_id,
+                    user_id=scope,
+                    title=payload.title,
+                    model_name=payload.model_name,
+                )
+            )
+        }
 
     @app.delete("/api/conversations/{conversation_id}")
-    def delete_conversation(conversation_id: str) -> dict:
-        store.delete(conversation_id)
+    def delete_conversation(conversation_id: str, request: Request) -> dict:
+        scope = _scope_user(request)
+        _get_or_404(store, conversation_id, user_id=scope)
+        store.delete(conversation_id, user_id=scope)
         return {"ok": True}
 
     @app.get("/api/conversations/{conversation_id}/export")
-    def export_conversation(conversation_id: str) -> dict:
-        conversation = _get_or_404(store, conversation_id)
+    def export_conversation(conversation_id: str, request: Request) -> dict:
+        conversation = _get_or_404(store, conversation_id, user_id=_scope_user(request))
         lines = [f"# {conversation.title}\n"]
         for msg in conversation.messages:
             role = "**我**" if msg.role == "user" else "**知记**"
@@ -559,7 +610,7 @@ def create_app(
         return {"markdown": "\n".join(lines)}
 
     @app.post("/api/note/save")
-    def save_note(payload: dict) -> dict:
+    def save_note(payload: dict, request: Request) -> dict:
         content = payload.get("content", "")
         path_str = payload.get("path")
         output_root = config.resolve_output_dir().resolve()
@@ -581,20 +632,24 @@ def create_app(
             path.write_text(content, encoding="utf-8")
         conversation_id = payload.get("conversation_id")
         if conversation_id:
+            scope = _scope_user(request)
+            _get_or_404(store, conversation_id, user_id=scope)
             store.attach_note(
                 conversation_id,
+                user_id=scope,
                 note_content=_strip_frontmatter(content),
                 note_path=str(path),
             )
         return {"ok": True, "path": str(path)}
 
     @app.post("/api/note/generate")
-    def generate_note(payload: GenerateNoteRequest) -> dict:
+    def generate_note(payload: GenerateNoteRequest, request: Request) -> dict:
+        scope = _scope_user(request)
         url = payload.url.strip()
         if not url:
             raise HTTPException(status_code=400, detail="URL 不能为空")
         if payload.conversation_id:
-            _get_or_404(store, payload.conversation_id)
+            _get_or_404(store, payload.conversation_id, user_id=scope)
         task_payload: dict[str, Any] = {"url": url}
         if payload.model:
             task_payload["model"] = payload.model
@@ -603,14 +658,19 @@ def create_app(
         active = _resolve_worker()
         # 生成接口必须使用当前应用配置的处理器；低层任务 API 仍允许外部覆盖。
         active.handlers[NOTE_TASK_TYPE] = _note_handler
-        task_id = active.submit(task_type=NOTE_TASK_TYPE, payload=task_payload)
-        return {"task": _task_public(_load_task(active, task_id))}
+        task_id = active.submit(
+            task_type=NOTE_TASK_TYPE, payload=task_payload, user_id=scope
+        )
+        return {"task": _task_public(_load_task(active, task_id, user_id=scope))}
 
     @app.post("/api/note/generate/stream")
     def generate_note_stream(payload: dict, request: Request) -> StreamingResponse:
+        scope = _scope_user(request)
         url = (payload.get("url") or "").strip()
         model_name = payload.get("model")
         conversation_id = payload.get("conversation_id")
+        if conversation_id:
+            _get_or_404(store, str(conversation_id), user_id=scope)
         if not url:
             raise HTTPException(status_code=400, detail="URL 不能为空")
 
@@ -632,6 +692,7 @@ def create_app(
                             url=url,
                             model_name=model_name,
                             conversation_id=conversation_id,
+                            user_id=scope,
                             on_delta=on_delta,
                             on_progress=on_progress,
                             cancel_callback=cancelled.is_set,
@@ -834,29 +895,35 @@ def create_app(
         return {"ok": True}
 
     @app.post("/api/chat")
-    def chat(payload: ChatRequest) -> dict:
+    def chat(payload: ChatRequest, request: Request) -> dict:
+        scope = _scope_user(request)
         conversation_id = payload.conversation_id
-        _get_or_404(store, conversation_id)
+        _get_or_404(store, conversation_id, user_id=scope)
         model = _resolve_model(config, payload.model_name)
-        store.update(conversation_id, model_name=model.name)
+        store.update(conversation_id, user_id=scope, model_name=model.name)
         message = payload.message.strip()
         source_context = extract_supported_links(message)
-        store.append_message(conversation_id, "user", message)
-        conversation = store.get(conversation_id)
+        store.append_message(conversation_id, "user", message, user_id=scope)
+        conversation = store.get(conversation_id, user_id=scope)
         reply = LLMClient(model).complete(build_chat_messages(conversation, source_context))
-        conversation = store.append_message(conversation_id, "assistant", reply)
+        conversation = store.append_message(
+            conversation_id, "assistant", reply, user_id=scope
+        )
         return {"reply": reply, "conversation": _conv_public(conversation)}
 
     @app.post("/api/chat/stream")
     def chat_stream(payload: ChatRequest, request: Request) -> StreamingResponse:
+        scope = _scope_user(request)
         conversation_id = payload.conversation_id
-        _get_or_404(store, conversation_id)
+        _get_or_404(store, conversation_id, user_id=scope)
         model = _resolve_model(config, payload.model_name)
-        store.update(conversation_id, model_name=model.name)
+        store.update(conversation_id, user_id=scope, model_name=model.name)
         message = payload.message.strip()
         source_context = extract_supported_links(message)
-        store.append_message(conversation_id, "user", message)
-        messages = build_chat_messages(store.get(conversation_id), source_context)
+        store.append_message(conversation_id, "user", message, user_id=scope)
+        messages = build_chat_messages(
+            store.get(conversation_id, user_id=scope), source_context
+        )
 
         async def event_source():
             events: queue.Queue = queue.Queue()
@@ -878,10 +945,14 @@ def create_app(
                     events.put({"error": error_response(exc)["error"]})
                 finally:
                     if collected:
-                        store.append_message(conversation_id, "assistant", "".join(collected))
+                        store.append_message(
+                            conversation_id, "assistant", "".join(collected), user_id=scope
+                        )
                     events.put({
                         "done": True,
-                        "conversation": _conv_public(store.get(conversation_id)),
+                        "conversation": _conv_public(
+                            store.get(conversation_id, user_id=scope)
+                        ),
                     })
                     events.put(None)
 
@@ -909,18 +980,21 @@ def create_app(
     # ---- 任务 API（阶段 2.3）-------------------------------------
 
     @app.post("/api/tasks")
-    def submit_task(payload: SubmitTaskRequest) -> dict:
+    def submit_task(payload: SubmitTaskRequest, request: Request) -> dict:
         active = _resolve_worker()
+        scope = _scope_user(request)
         task_id = active.submit(
             task_type=payload.type,
             platform=payload.platform,
             payload=payload.payload,
             priority=payload.priority,
+            user_id=scope,
         )
-        return {"task": _task_public(_load_task(active, task_id))}
+        return {"task": _task_public(_load_task(active, task_id, user_id=scope))}
 
     @app.get("/api/tasks")
     def list_tasks(
+        request: Request,
         status: str | None = None,
         platform: str | None = None,
         limit: int = 50,
@@ -941,18 +1015,23 @@ def create_app(
                 platform=platform,
                 limit=max(1, min(limit, 200)),
                 offset=max(0, offset),
+                user_id=_scope_user(request),
             )
         return {"tasks": [_task_public(row) for row in rows]}
 
     @app.get("/api/tasks/{task_id}")
-    def get_task(task_id: str) -> dict:
-        return {"task": _task_public(_load_task(_resolve_worker(), task_id))}
+    def get_task(task_id: str, request: Request) -> dict:
+        return {
+            "task": _task_public(
+                _load_task(_resolve_worker(), task_id, user_id=_scope_user(request))
+            )
+        }
 
     @app.post("/api/tasks/{task_id}/cancel")
-    def cancel_task(task_id: str) -> dict:
+    def cancel_task(task_id: str, request: Request) -> dict:
         active = _resolve_worker()
         try:
-            row = active.cancel(task_id)
+            row = active.cancel(task_id, user_id=_scope_user(request))
         except TaskNotFoundError as exc:
             raise _http_error(404, exc) from exc
         except TaskTransitionError as exc:
@@ -962,7 +1041,8 @@ def create_app(
     @app.get("/api/tasks/{task_id}/events")
     def task_events(task_id: str, request: Request) -> StreamingResponse:
         active = _resolve_worker()
-        _load_task(active, task_id)
+        scope = _scope_user(request)
+        _load_task(active, task_id, user_id=scope)
 
         async def event_source():
             channel = active.bus.subscribe(task_id)
@@ -973,7 +1053,7 @@ def create_app(
                 while True:
                     if await request.is_disconnected():
                         break
-                    row = _load_task(active, task_id)
+                    row = _load_task(active, task_id, user_id=scope)
                     snapshot = _task_public(row)
                     if snapshot != last:
                         yield _sse({"task": snapshot})

@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Engine, create_engine, event
+from sqlalchemy import Engine, create_engine, event, inspect
 from sqlalchemy.exc import ArgumentError, NoSuchModuleError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -98,9 +98,38 @@ class Database:
         )
 
     def create_all(self) -> None:
-        """按 ORM 定义建表（幂等）。"""
+        """按 ORM 定义建表（幂等），并为早期版本的库补上后续新增列。"""
 
         Base.metadata.create_all(self.engine)
+        self._ensure_added_columns()
+
+    #: 后续版本新增的「可空」列：建表无法补列，这里做幂等的轻量迁移。
+    _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+        ("conversations", "user_id", "VARCHAR(36)"),
+        ("tasks", "user_id", "VARCHAR(36)"),
+    )
+
+    def _ensure_added_columns(self) -> None:
+        """给已存在的表补上缺失的可空列与索引（SQLite / PostgreSQL 通用）。"""
+
+        inspector = inspect(self.engine)
+        tables = set(inspector.get_table_names())
+        with self.engine.begin() as conn:
+            for table, column, ddl_type in self._ADDED_COLUMNS:
+                if table not in tables:
+                    continue
+                existing = {col["name"] for col in inspector.get_columns(table)}
+                if column in existing:
+                    continue
+                conn.exec_driver_sql(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"
+                )
+            for table, column, _ in self._ADDED_COLUMNS:
+                if table in tables:
+                    conn.exec_driver_sql(
+                        f"CREATE INDEX IF NOT EXISTS ix_{table}_{column} "
+                        f"ON {table} ({column})"
+                    )
 
     def drop_all(self) -> None:
         """删除所有表，仅用于测试。"""

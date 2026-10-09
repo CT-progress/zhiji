@@ -17,11 +17,21 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from sqlalchemy import func, select, update
+
+from zhiji.auth import normalize_username
 from zhiji.chat import DATA_DIR, Conversation, conversation_to_row
 from zhiji.config import read_config_file
 from zhiji.errors import ZhijiError
 from zhiji.models import AppConfig
-from zhiji.storage import ConfigRepository, ConversationRow, Database, get_database
+from zhiji.storage import (
+    ConfigRepository,
+    ConversationRow,
+    Database,
+    TaskRow,
+    UserRepository,
+    get_database,
+)
 
 
 @dataclass(frozen=True)
@@ -106,6 +116,41 @@ def import_config(
     return ConfigImportResult(models=len(config.models), imported=True)
 
 
+def assign_legacy_data(
+    database: Database, username: str, *, dry_run: bool = False
+) -> tuple[int, int]:
+    """把 user_id 为空的历史会话 / 任务认领给指定用户，返回 (会话数, 任务数)。"""
+
+    database.create_all()
+    normalized = normalize_username(username)
+    with database.session_scope() as session:
+        user = UserRepository(session).find_by_username(normalized)
+        if user is None:
+            raise ZhijiError(
+                f"用户不存在: {username}", hint="请先用同一数据库注册该账号"
+            )
+        conversations = session.scalar(
+            select(func.count())
+            .select_from(ConversationRow)
+            .where(ConversationRow.user_id.is_(None))
+        )
+        tasks = session.scalar(
+            select(func.count()).select_from(TaskRow).where(TaskRow.user_id.is_(None))
+        )
+        if not dry_run:
+            session.execute(
+                update(ConversationRow)
+                .where(ConversationRow.user_id.is_(None))
+                .values(user_id=user.id)
+            )
+            session.execute(
+                update(TaskRow)
+                .where(TaskRow.user_id.is_(None))
+                .values(user_id=user.id)
+            )
+    return int(conversations or 0), int(tasks or 0)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m zhiji.migrate",
@@ -130,7 +175,25 @@ def main(argv: list[str] | None = None) -> int:
         help="改为导入模型/设置配置文件（如 config/zhiji.json）",
     )
     parser.add_argument("--dry-run", action="store_true", help="只统计不写入")
+    parser.add_argument(
+        "--assign-user",
+        dest="assign_user",
+        default=None,
+        help="把 user_id 为空的历史会话 / 任务认领给该用户",
+    )
     args = parser.parse_args(argv)
+
+    if args.assign_user:
+        database = Database(args.database_url) if args.database_url else get_database()
+        claimed_conversations, claimed_tasks = assign_legacy_data(
+            database, args.assign_user, dry_run=args.dry_run
+        )
+        prefix = "[dry-run] " if args.dry_run else ""
+        print(
+            f"{prefix}认领 {claimed_conversations} 个会话、"
+            f"{claimed_tasks} 个任务 -> {args.assign_user}"
+        )
+        return 0
 
     if args.config_path:
         config_path = Path(args.config_path)

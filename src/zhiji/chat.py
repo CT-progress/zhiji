@@ -24,6 +24,7 @@ from zhiji.config import PROJECT_ROOT
 from zhiji.errors import InputUnsupportedError, ZhijiError
 from zhiji.platforms.registry import resolve_adapter
 from zhiji.storage.db import Database, get_database
+from zhiji.storage.scope import ANY_USER, UserScope
 from zhiji.storage.tables import ConversationMessageRow, ConversationRow
 
 DATA_DIR = PROJECT_ROOT / "data"
@@ -104,18 +105,33 @@ class ChatBackend(Protocol):
     backend_name: str
     location: str
 
-    def list(self) -> list[Conversation]: ...
+    def list(self, *, user_id: UserScope = ANY_USER) -> list[Conversation]: ...
 
-    def get(self, conversation_id: str) -> Conversation: ...
+    def get(
+        self, conversation_id: str, *, user_id: UserScope = ANY_USER
+    ) -> Conversation: ...
 
-    def create(self, title: str = DEFAULT_TITLE, model_name: str | None = None) -> Conversation: ...
+    def create(
+        self,
+        title: str = DEFAULT_TITLE,
+        model_name: str | None = None,
+        *,
+        user_id: str | None = None,
+    ) -> Conversation: ...
 
-    def update(self, conversation_id: str, **changes: str | None) -> Conversation: ...
+    def update(
+        self,
+        conversation_id: str,
+        *,
+        user_id: UserScope = ANY_USER,
+        **changes: str | None,
+    ) -> Conversation: ...
 
     def attach_note(
         self,
         conversation_id: str,
         *,
+        user_id: UserScope = ANY_USER,
         platform: str | None = None,
         source_url: str | None = None,
         note_content: str | None = None,
@@ -123,10 +139,17 @@ class ChatBackend(Protocol):
         title: str | None = None,
     ) -> Conversation: ...
 
-    def delete(self, conversation_id: str) -> None: ...
+    def delete(
+        self, conversation_id: str, *, user_id: UserScope = ANY_USER
+    ) -> None: ...
 
     def append_message(
-        self, conversation_id: str, role: ChatRole, content: str
+        self,
+        conversation_id: str,
+        role: ChatRole,
+        content: str,
+        *,
+        user_id: UserScope = ANY_USER,
     ) -> Conversation: ...
 
 
@@ -161,18 +184,27 @@ class JsonChatStore:
         tmp.write_text(payload, encoding="utf-8")
         tmp.replace(self.path)
 
-    def list(self) -> list[Conversation]:
+    def list(self, *, user_id: UserScope = ANY_USER) -> list[Conversation]:
+        # JSON 后端是单机单用户回退，忽略 user_id 作用域。
         with self._lock:
             return sorted(self._read(), key=lambda c: c.updated_at, reverse=True)
 
-    def get(self, conversation_id: str) -> Conversation:
+    def get(
+        self, conversation_id: str, *, user_id: UserScope = ANY_USER
+    ) -> Conversation:
         with self._lock:
             for conversation in self._read():
                 if conversation.id == conversation_id:
                     return conversation
         raise ChatNotFoundError(f"会话不存在: {conversation_id}", hint="会话可能已被删除")
 
-    def create(self, title: str = DEFAULT_TITLE, model_name: str | None = None) -> Conversation:
+    def create(
+        self,
+        title: str = DEFAULT_TITLE,
+        model_name: str | None = None,
+        *,
+        user_id: str | None = None,
+    ) -> Conversation:
         conversation = Conversation(title=(title or DEFAULT_TITLE).strip(), model_name=model_name)
         with self._lock:
             data = self._read()
@@ -180,7 +212,13 @@ class JsonChatStore:
             self._write(data)
         return conversation
 
-    def update(self, conversation_id: str, **changes: str | None) -> Conversation:
+    def update(
+        self,
+        conversation_id: str,
+        *,
+        user_id: UserScope = ANY_USER,
+        **changes: str | None,
+    ) -> Conversation:
         with self._lock:
             conversation = self.get(conversation_id)
             payload = conversation.model_dump()
@@ -196,6 +234,7 @@ class JsonChatStore:
         self,
         conversation_id: str,
         *,
+        user_id: UserScope = ANY_USER,
         platform: str | None = None,
         source_url: str | None = None,
         note_content: str | None = None,
@@ -221,14 +260,21 @@ class JsonChatStore:
             self._replace(conversation)
         return conversation
 
-    def delete(self, conversation_id: str) -> None:
+    def delete(
+        self, conversation_id: str, *, user_id: UserScope = ANY_USER
+    ) -> None:
         with self._lock:
             self.get(conversation_id)
             data = [c for c in self._read() if c.id != conversation_id]
             self._write(data)
 
     def append_message(
-        self, conversation_id: str, role: ChatRole, content: str
+        self,
+        conversation_id: str,
+        role: ChatRole,
+        content: str,
+        *,
+        user_id: UserScope = ANY_USER,
     ) -> Conversation:
         with self._lock:
             conversation = self.get(conversation_id)
@@ -271,33 +317,63 @@ class DbChatStore:
         self._lock = _lock_for_key(f"db:{self.database.url}")
 
     @staticmethod
-    def _row(session: Session, conversation_id: str) -> ConversationRow:
-        row = session.get(ConversationRow, conversation_id)
+    def _row(
+        session: Session,
+        conversation_id: str,
+        *,
+        user_id: UserScope = ANY_USER,
+    ) -> ConversationRow:
+        stmt = select(ConversationRow).where(ConversationRow.id == conversation_id)
+        if user_id is None:
+            stmt = stmt.where(ConversationRow.user_id.is_(None))
+        elif user_id is not ANY_USER:
+            stmt = stmt.where(ConversationRow.user_id == user_id)
+        row = session.scalars(stmt).first()
         if row is None:
             raise ChatNotFoundError(f"会话不存在: {conversation_id}", hint="会话可能已被删除")
         return row
 
-    def list(self) -> list[Conversation]:
+    def list(self, *, user_id: UserScope = ANY_USER) -> list[Conversation]:
         stmt = select(ConversationRow).order_by(
             ConversationRow.updated_at.desc(), ConversationRow.id
         )
+        if user_id is None:
+            stmt = stmt.where(ConversationRow.user_id.is_(None))
+        elif user_id is not ANY_USER:
+            stmt = stmt.where(ConversationRow.user_id == user_id)
         with self._lock, self.database.session_scope() as session:
             return [row_to_conversation(row) for row in session.scalars(stmt)]
 
-    def get(self, conversation_id: str) -> Conversation:
+    def get(self, conversation_id: str, *, user_id: UserScope = ANY_USER) -> Conversation:
         with self._lock, self.database.session_scope() as session:
-            return row_to_conversation(self._row(session, conversation_id))
+            return row_to_conversation(
+                self._row(session, conversation_id, user_id=user_id)
+            )
 
-    def create(self, title: str = DEFAULT_TITLE, model_name: str | None = None) -> Conversation:
+    def create(
+        self,
+        title: str = DEFAULT_TITLE,
+        model_name: str | None = None,
+        *,
+        user_id: str | None = None,
+    ) -> Conversation:
         conversation = Conversation(title=(title or DEFAULT_TITLE).strip(), model_name=model_name)
         with self._lock, self.database.session_scope() as session:
-            session.add(conversation_to_row(conversation))
+            session.add(conversation_to_row(conversation, user_id=user_id))
             session.flush()
-            return row_to_conversation(self._row(session, conversation.id))
+            return row_to_conversation(
+                self._row(session, conversation.id, user_id=user_id)
+            )
 
-    def update(self, conversation_id: str, **changes: str | None) -> Conversation:
+    def update(
+        self,
+        conversation_id: str,
+        *,
+        user_id: UserScope = ANY_USER,
+        **changes: str | None,
+    ) -> Conversation:
         with self._lock, self.database.session_scope() as session:
-            row = self._row(session, conversation_id)
+            row = self._row(session, conversation_id, user_id=user_id)
             for key in ("title", "model_name"):
                 if key in changes and changes[key] is not None:
                     setattr(row, key, changes[key])
@@ -309,6 +385,7 @@ class DbChatStore:
         self,
         conversation_id: str,
         *,
+        user_id: UserScope = ANY_USER,
         platform: str | None = None,
         source_url: str | None = None,
         note_content: str | None = None,
@@ -317,7 +394,7 @@ class DbChatStore:
     ) -> Conversation:
         """把生成的笔记绑定到会话，后续对话即可基于笔记上下文。"""
         with self._lock, self.database.session_scope() as session:
-            row = self._row(session, conversation_id)
+            row = self._row(session, conversation_id, user_id=user_id)
             for key, value in {
                 "platform": platform,
                 "source_url": source_url,
@@ -332,15 +409,20 @@ class DbChatStore:
             session.flush()
             return row_to_conversation(row)
 
-    def delete(self, conversation_id: str) -> None:
+    def delete(self, conversation_id: str, *, user_id: UserScope = ANY_USER) -> None:
         with self._lock, self.database.session_scope() as session:
-            session.delete(self._row(session, conversation_id))
+            session.delete(self._row(session, conversation_id, user_id=user_id))
 
     def append_message(
-        self, conversation_id: str, role: ChatRole, content: str
+        self,
+        conversation_id: str,
+        role: ChatRole,
+        content: str,
+        *,
+        user_id: UserScope = ANY_USER,
     ) -> Conversation:
         with self._lock, self.database.session_scope() as session:
-            row = self._row(session, conversation_id)
+            row = self._row(session, conversation_id, user_id=user_id)
             row.messages.append(ConversationMessageRow(role=role, content=content))
             row.updated_at = datetime.now(UTC)
             if role == "user" and row.title == DEFAULT_TITLE:
@@ -385,22 +467,35 @@ class ChatStore:
 
         return getattr(self._store, "database", None)
 
-    def list(self) -> list[Conversation]:
-        return self._store.list()
+    def list(self, *, user_id: UserScope = ANY_USER) -> list[Conversation]:
+        return self._store.list(user_id=user_id)
 
-    def get(self, conversation_id: str) -> Conversation:
-        return self._store.get(conversation_id)
+    def get(self, conversation_id: str, *, user_id: UserScope = ANY_USER) -> Conversation:
+        return self._store.get(conversation_id, user_id=user_id)
 
-    def create(self, title: str = DEFAULT_TITLE, model_name: str | None = None) -> Conversation:
-        return self._store.create(title, model_name)
+    def create(
+        self,
+        title: str = DEFAULT_TITLE,
+        model_name: str | None = None,
+        *,
+        user_id: str | None = None,
+    ) -> Conversation:
+        return self._store.create(title, model_name, user_id=user_id)
 
-    def update(self, conversation_id: str, **changes: str | None) -> Conversation:
-        return self._store.update(conversation_id, **changes)
+    def update(
+        self,
+        conversation_id: str,
+        *,
+        user_id: UserScope = ANY_USER,
+        **changes: str | None,
+    ) -> Conversation:
+        return self._store.update(conversation_id, user_id=user_id, **changes)
 
     def attach_note(
         self,
         conversation_id: str,
         *,
+        user_id: UserScope = ANY_USER,
         platform: str | None = None,
         source_url: str | None = None,
         note_content: str | None = None,
@@ -409,6 +504,7 @@ class ChatStore:
     ) -> Conversation:
         return self._store.attach_note(
             conversation_id,
+            user_id=user_id,
             platform=platform,
             source_url=source_url,
             note_content=note_content,
@@ -416,13 +512,20 @@ class ChatStore:
             title=title,
         )
 
-    def delete(self, conversation_id: str) -> None:
-        self._store.delete(conversation_id)
+    def delete(self, conversation_id: str, *, user_id: UserScope = ANY_USER) -> None:
+        self._store.delete(conversation_id, user_id=user_id)
 
     def append_message(
-        self, conversation_id: str, role: ChatRole, content: str
+        self,
+        conversation_id: str,
+        role: ChatRole,
+        content: str,
+        *,
+        user_id: UserScope = ANY_USER,
     ) -> Conversation:
-        return self._store.append_message(conversation_id, role, content)
+        return self._store.append_message(
+            conversation_id, role, content, user_id=user_id
+        )
 
 
 def resolve_database(data_dir: str | Path | None) -> Database:
@@ -441,11 +544,14 @@ def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
-def conversation_to_row(conversation: Conversation) -> ConversationRow:
+def conversation_to_row(
+    conversation: Conversation, *, user_id: str | None = None
+) -> ConversationRow:
     """Pydantic 会话 -> ORM 行（含消息），建库与迁移脚本共用。"""
 
     row = ConversationRow(
         id=conversation.id,
+        user_id=user_id,
         title=conversation.title,
         model_name=conversation.model_name,
         platform=conversation.platform,

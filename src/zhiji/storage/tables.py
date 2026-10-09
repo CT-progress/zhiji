@@ -28,6 +28,10 @@ class TaskRow(Base):
     __tablename__ = "tasks"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    #: 数据归属用户；None 表示本机默认作用域（未开启账号鉴权时的历史数据）
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, default=None
+    )
     type: Mapped[str] = mapped_column(String(64), index=True)
     platform: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
     status: Mapped[str] = mapped_column(
@@ -77,6 +81,10 @@ class ConversationRow(Base):
     __tablename__ = "conversations"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    #: 数据归属用户；None 表示本机默认作用域（未开启账号鉴权时的历史数据）
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, default=None
+    )
     title: Mapped[str] = mapped_column(String(200), default="新对话")
     model_name: Mapped[str | None] = mapped_column(String(64), default=None)
     platform: Mapped[str | None] = mapped_column(String(32), default=None)
