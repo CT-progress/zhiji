@@ -2,7 +2,7 @@
 
 > 版本：v1.0 　编制日期：2026-10-09
 > 配套文档：`docs/ARCHITECTURE.md`（架构设计，回答"为什么这样设计"）；本文回答"具体怎么做、按什么顺序做"。
-> 代码基线：`main` @ `0a0f85a`（已推送到 GitHub）
+> 代码基线：本地 `main`（已含阶段 1 的迭代 1.1 / 1.2，按约定暂不推送）
 
 ---
 
@@ -14,7 +14,7 @@
 | **总体路线** | 6 个阶段：工程底座 → 持久化 → 异步任务 → 账号隔离 → 凭据安全 → 容器部署 |
 | **语言策略** | 先用 Python 打通业务闭环；Java 控制面放到最后的可选阶段 |
 | **实施原则** | 不重写、只叠加；每一步测试全绿；每一步可独立回滚 |
-| **当前状态** | 阶段 0 已完成（基线合并并推送），进入阶段 1 |
+| **当前状态** | 阶段 0 已完成；阶段 1 的 1.1 数据库底座、1.2 会话落库已完成（本机提交） |
 
 ---
 
@@ -114,16 +114,19 @@
 
 | 迭代 | 内容 | 验收标准 |
 | --- | --- | --- |
-| **1.1 数据库底座** | 新增 SQLAlchemy 依赖；`storage/` 模块（engine / session / 表 / 仓储）；`ZHIJI_DATABASE_URL` 配置；任务表 CRUD；单元测试 | 默认生成 `data/zhiji.db`；任务表可增删查改；三件套全绿 |
-| **1.2 会话落库** | `ChatStore` 从 JSON 改为数据库后端；保留一次性迁移脚本与回退开关 | 老会话可平滑迁移；`test_chat_store` 全绿 |
+| ✅ **1.1 数据库底座** | 新增 SQLAlchemy 依赖；`storage/` 模块（engine / session / 表 / 仓储）；`ZHIJI_DATABASE_URL` 配置；任务表 CRUD；单元测试 | 默认生成 `data/zhiji.db`；任务表可增删查改；三件套全绿 |
+| ✅ **1.2 会话落库** | `ChatStore` 从 JSON 改为数据库后端；保留一次性迁移脚本与回退开关 | 老会话可平滑迁移；`test_chat_store` 全绿 |
 | **1.3 配置入库** | 模型配置（`config/zhiji.json`）迁入数据库；支持从文件导入 | 现有模型配置可导入；Web 配置页功能不回退 |
 
 **新增 / 改动**
 
 - `pyproject.toml`：+ `sqlalchemy`、+ `alembic`（迁移工具）
 - 新增 `src/zhiji/storage/{__init__,db,tables,repository}.py`
-- `.env.example`：+ `ZHIJI_DATABASE_URL`
-- 测试：`tests/test_storage.py`
+- `src/zhiji/chat.py`：`ChatStore` 拆成「门面 + db / json 后端」，默认数据库后端，
+  会话与消息分表存储（每次追加只 INSERT 一行，因此并发追加不丢消息）
+- 新增 `src/zhiji/migrate.py`：`python -m zhiji.migrate [--dry-run]` 把旧 JSON 会话导入数据库（幂等）
+- `.env.example`：+ `ZHIJI_DATABASE_URL`、+ `ZHIJI_CHAT_BACKEND`（`db` 默认 / `json` 回退）
+- 测试：`tests/test_storage.py`、`tests/test_chat_store.py`、`tests/test_migrate.py`
 
 **关键决策**：默认 **SQLite**（零运维、单机足够），通过 URL 切换 **PostgreSQL**（生产）。SQLAlchemy 让同一套代码适配两者。
 
@@ -239,19 +242,26 @@
 | D4 | 语言策略：先 Python，后 Java 控制面 | 避免"边学 Java 边改业务"的双重风险 | 阶段 6 |
 | D5 | 凭据加密用 cryptography + 环境主密钥 | 简单可靠，无外部依赖 | 上云后用 KMS/Vault |
 | D6 | 不重写 `platforms/` 适配器 | 现有实现质量良好，是核心资产 | — |
+| D7 | 会话默认入库，保留 `ZHIJI_CHAT_BACKEND=json` 回退 | 消息表天然支持并发追加；回退开关让迁移可逆 | 并发写入成为瓶颈时切 PostgreSQL |
 
 ---
 
 ## 9. 下一步
 
-**进入阶段 1 · 迭代 1.1：数据库底座**
+**进入阶段 1 · 迭代 1.3：配置入库**
 
 具体内容：
 
-1. `pyproject.toml` 增加 `sqlalchemy`、`alembic` 依赖；
-2. 新增 `src/zhiji/storage/` 模块：`db.py`（引擎与会话）、`tables.py`（ORM 表）、`repository.py`（仓储）；
-3. 新增配置项 `ZHIJI_DATABASE_URL`（默认 `sqlite:///data/zhiji.db`），同步更新 `.env.example`；
-4. 新增 `tests/test_storage.py`；
-5. 跑三件套验证。
+1. 新增 `model_configs` 表，把 `config/zhiji.json` 里的模型配置（provider / name / base_url / api_key / default）迁入数据库；
+2. `ConfigManager` 变成"数据库优先 + 文件导入/回退"，Web 配置页读写数据库；
+3. 同步更新 `.env.example` 与 `docs/ARCHITECTURE.md`；
+4. 跑三件套验证。
 
-**验收**：默认生成 `data/zhiji.db`；任务表可增删查改；pytest / ruff / mypy 全绿。
+**验收**：现有模型配置可一键导入；Web 配置页 CRUD 表现与现在一致；pytest / ruff / mypy 全绿。
+
+### 迭代记录
+
+| 迭代 | 状态 | 验证 |
+| --- | --- | --- |
+| 1.1 数据库底座 | ✅ 完成 | 120 passed / ruff 全绿 / mypy 36 files |
+| 1.2 会话落库 | ✅ 完成 | 138 passed / ruff 全绿 / mypy 37 files；22 个真实会话、54 条消息迁移后与 JSON 一致 |

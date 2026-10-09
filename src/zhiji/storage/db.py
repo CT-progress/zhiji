@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.exc import ArgumentError, NoSuchModuleError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -32,6 +32,20 @@ def default_database_url() -> str:
     return f"sqlite:///{path.as_posix()}"
 
 
+def _sqlite_on_connect(dbapi_connection: Any, _connection_record: Any) -> None:
+    """SQLite 连接初始化：打开外键约束、放宽写锁等待、文件库启用 WAL。"""
+
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA busy_timeout=30000")
+        database = str(getattr(dbapi_connection, "database", ""))
+        if database and database != ":memory:":
+            cursor.execute("PRAGMA journal_mode=WAL")
+    finally:
+        cursor.close()
+
+
 def create_database_engine(url: str | None = None) -> Engine:
     """按连接串创建引擎；SQLite 自动放宽线程限制。"""
 
@@ -39,14 +53,17 @@ def create_database_engine(url: str | None = None) -> Engine:
     kwargs: dict[str, Any] = {}
     if resolved.startswith("sqlite"):
         # FastAPI / 后台线程会跨线程复用连接，SQLite 默认禁止这一点。
-        kwargs["connect_args"] = {"check_same_thread": False}
+        kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
         if ":memory:" in resolved:
             # 内存库必须复用同一连接，否则每次连接都是一个新的空库。
             kwargs["poolclass"] = StaticPool
     try:
-        return create_engine(resolved, **kwargs)
+        engine = create_engine(resolved, **kwargs)
     except (ArgumentError, NoSuchModuleError) as exc:
         raise StorageError("数据库连接串无效", hint=str(exc)) from exc
+    if resolved.startswith("sqlite"):
+        event.listen(engine, "connect", _sqlite_on_connect)
+    return engine
 
 
 class Database:

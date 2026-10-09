@@ -11,12 +11,14 @@ from zhiji.storage.db import (
     reset_database,
 )
 from zhiji.storage.repository import TERMINAL_STATUSES, TaskRepository
-from zhiji.storage.tables import Base, TaskRow
+from zhiji.storage.tables import Base, ConversationMessageRow, ConversationRow, TaskRow
 
 __all__ = [
     "DEFAULT_DB_RELATIVE",
     "TERMINAL_STATUSES",
     "Base",
+    "ConversationMessageRow",
+    "ConversationRow",
     "Database",
     "TaskRepository",
     "TaskRow",

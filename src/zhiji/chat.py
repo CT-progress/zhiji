@@ -1,37 +1,58 @@
-"""本地知识问答会话的存储与聊天调用封装。"""
+"""本地知识问答会话的存储与聊天调用封装。
+
+会话默认写入关系数据库（``conversations`` / ``conversation_messages`` 两张表）；
+旧的 ``data/conversations.json`` 可用 ``python -m zhiji.migrate`` 一次性导入。
+把环境变量 ``ZHIJI_CHAT_BACKEND`` 设为 ``json`` 可回退旧的文件后端。
+"""
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from zhiji.config import PROJECT_ROOT
 from zhiji.errors import InputUnsupportedError, ZhijiError
 from zhiji.platforms.registry import resolve_adapter
+from zhiji.storage.db import Database, get_database
+from zhiji.storage.tables import ConversationMessageRow, ConversationRow
 
 DATA_DIR = PROJECT_ROOT / "data"
 DEFAULT_TITLE = "新对话"
+DEFAULT_DB_FILENAME = "zhiji.db"
 
-#: 进程内按文件路径复用的可重入锁，避免同一会话文件的读改写竞争。
+#: 会话存储后端：db（默认，关系数据库）或 json（旧版文件后端）。
+CHAT_BACKEND_ENV = "ZHIJI_CHAT_BACKEND"
+DB_BACKEND = "db"
+JSON_BACKEND = "json"
+
+#: 进程内按存储位置复用的可重入锁，避免同一份会话数据的读改写竞争。
 _LOCKS: dict[str, threading.RLock] = {}
 _LOCKS_GUARD = threading.Lock()
 
 
-def _lock_for(path: Path) -> threading.RLock:
-    key = str(path.resolve()) if path.exists() else str(path.absolute())
+def _lock_for_key(key: str) -> threading.RLock:
     with _LOCKS_GUARD:
         lock = _LOCKS.get(key)
         if lock is None:
             lock = threading.RLock()
             _LOCKS[key] = lock
         return lock
+
+
+def _lock_for(path: Path) -> threading.RLock:
+    key = str(path.resolve()) if path.exists() else str(path.absolute())
+    return _lock_for_key(key)
+
 
 CHAT_SYSTEM_PROMPT = (
     "你是知记助手，一个帮助用户深度学习和系统整理知识的中文助手。\n"
@@ -50,9 +71,12 @@ _MAX_HISTORY = 24
 _MAX_SOURCE_TEXT = 30000
 _URL_RE = re.compile(r"https?://[^\s<>'\"]+")
 
+#: 会话消息角色；append_message 只接受 user / assistant 两种。
+ChatRole = Literal["system", "user", "assistant"]
+
 
 class ChatMessage(BaseModel):
-    role: Literal["system", "user", "assistant"]
+    role: ChatRole
     content: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -74,12 +98,47 @@ class ChatNotFoundError(ZhijiError):
     code = "CHAT_NOT_FOUND"
 
 
-class ChatStore:
-    """把会话持久化到 data/conversations.json。"""
+class ChatBackend(Protocol):
+    """会话存储后端的最小接口，供 db / json 两种实现共享。"""
+
+    backend_name: str
+    location: str
+
+    def list(self) -> list[Conversation]: ...
+
+    def get(self, conversation_id: str) -> Conversation: ...
+
+    def create(self, title: str = DEFAULT_TITLE, model_name: str | None = None) -> Conversation: ...
+
+    def update(self, conversation_id: str, **changes: str | None) -> Conversation: ...
+
+    def attach_note(
+        self,
+        conversation_id: str,
+        *,
+        platform: str | None = None,
+        source_url: str | None = None,
+        note_content: str | None = None,
+        note_path: str | None = None,
+        title: str | None = None,
+    ) -> Conversation: ...
+
+    def delete(self, conversation_id: str) -> None: ...
+
+    def append_message(
+        self, conversation_id: str, role: ChatRole, content: str
+    ) -> Conversation: ...
+
+
+class JsonChatStore:
+    """旧版文件后端：把会话持久化到 data/conversations.json。"""
+
+    backend_name = JSON_BACKEND
 
     def __init__(self, data_dir: str | Path | None = None) -> None:
         self.data_dir = Path(data_dir) if data_dir else DATA_DIR
         self.path = self.data_dir / "conversations.json"
+        self.location = str(self.path)
         self._lock = _lock_for(self.path)
 
     def _read(self) -> list[Conversation]:
@@ -168,7 +227,9 @@ class ChatStore:
             data = [c for c in self._read() if c.id != conversation_id]
             self._write(data)
 
-    def append_message(self, conversation_id: str, role: Literal["user", "assistant"], content: str) -> Conversation:
+    def append_message(
+        self, conversation_id: str, role: ChatRole, content: str
+    ) -> Conversation:
         with self._lock:
             conversation = self.get(conversation_id)
             conversation.messages.append(ChatMessage(role=role, content=content))
@@ -186,6 +247,239 @@ class ChatStore:
                     data[index] = conversation
                     break
             self._write(data)
+
+
+class DbChatStore:
+    """默认后端：会话主表 + 消息表，每追加一条消息只插入一行。
+
+    消息表天然避免了「读改写整个文件」的丢更新问题；SQLite 等单写者数据库
+    在进程内再加一把锁，避免多线程同时升级写锁而报 database is locked。
+    """
+
+    backend_name = DB_BACKEND
+
+    def __init__(
+        self,
+        database: Database | None = None,
+        *,
+        data_dir: str | Path | None = None,
+    ) -> None:
+        self.data_dir = Path(data_dir) if data_dir else DATA_DIR
+        self.database = database or _resolve_database(data_dir)
+        self.location = self.database.url
+        self.database.create_all()
+        self._lock = _lock_for_key(f"db:{self.database.url}")
+
+    @staticmethod
+    def _row(session: Session, conversation_id: str) -> ConversationRow:
+        row = session.get(ConversationRow, conversation_id)
+        if row is None:
+            raise ChatNotFoundError(f"会话不存在: {conversation_id}", hint="会话可能已被删除")
+        return row
+
+    def list(self) -> list[Conversation]:
+        stmt = select(ConversationRow).order_by(
+            ConversationRow.updated_at.desc(), ConversationRow.id
+        )
+        with self._lock, self.database.session_scope() as session:
+            return [row_to_conversation(row) for row in session.scalars(stmt)]
+
+    def get(self, conversation_id: str) -> Conversation:
+        with self._lock, self.database.session_scope() as session:
+            return row_to_conversation(self._row(session, conversation_id))
+
+    def create(self, title: str = DEFAULT_TITLE, model_name: str | None = None) -> Conversation:
+        conversation = Conversation(title=(title or DEFAULT_TITLE).strip(), model_name=model_name)
+        with self._lock, self.database.session_scope() as session:
+            session.add(conversation_to_row(conversation))
+            session.flush()
+            return row_to_conversation(self._row(session, conversation.id))
+
+    def update(self, conversation_id: str, **changes: str | None) -> Conversation:
+        with self._lock, self.database.session_scope() as session:
+            row = self._row(session, conversation_id)
+            for key in ("title", "model_name"):
+                if key in changes and changes[key] is not None:
+                    setattr(row, key, changes[key])
+            row.updated_at = datetime.now(UTC)
+            session.flush()
+            return row_to_conversation(row)
+
+    def attach_note(
+        self,
+        conversation_id: str,
+        *,
+        platform: str | None = None,
+        source_url: str | None = None,
+        note_content: str | None = None,
+        note_path: str | None = None,
+        title: str | None = None,
+    ) -> Conversation:
+        """把生成的笔记绑定到会话，后续对话即可基于笔记上下文。"""
+        with self._lock, self.database.session_scope() as session:
+            row = self._row(session, conversation_id)
+            for key, value in {
+                "platform": platform,
+                "source_url": source_url,
+                "note_content": note_content,
+                "note_path": note_path,
+            }.items():
+                if value is not None:
+                    setattr(row, key, value)
+            if title:
+                row.title = title.strip()[:60] or row.title
+            row.updated_at = datetime.now(UTC)
+            session.flush()
+            return row_to_conversation(row)
+
+    def delete(self, conversation_id: str) -> None:
+        with self._lock, self.database.session_scope() as session:
+            session.delete(self._row(session, conversation_id))
+
+    def append_message(
+        self, conversation_id: str, role: ChatRole, content: str
+    ) -> Conversation:
+        with self._lock, self.database.session_scope() as session:
+            row = self._row(session, conversation_id)
+            row.messages.append(ConversationMessageRow(role=role, content=content))
+            row.updated_at = datetime.now(UTC)
+            if role == "user" and row.title == DEFAULT_TITLE:
+                row.title = _auto_title(content)
+            session.flush()
+            return row_to_conversation(row)
+
+
+class ChatStore:
+    """会话存储门面：默认数据库后端，可用 ``ZHIJI_CHAT_BACKEND=json`` 回退。
+
+    显式传入 ``data_dir`` 时，数据库落在该目录下的 ``zhiji.db``（便于测试和
+    按目录隔离）；否则复用进程级数据库，也就是 ``ZHIJI_DATABASE_URL`` 或
+    项目内 ``data/zhiji.db``。
+    """
+
+    def __init__(
+        self,
+        data_dir: str | Path | None = None,
+        *,
+        backend: str | None = None,
+        database: Database | None = None,
+    ) -> None:
+        self.data_dir = Path(data_dir) if data_dir else DATA_DIR
+        mode = (backend or os.getenv(CHAT_BACKEND_ENV) or DB_BACKEND).strip().lower()
+        if mode == JSON_BACKEND:
+            store: ChatBackend = JsonChatStore(data_dir)
+        elif mode == DB_BACKEND:
+            store = DbChatStore(database, data_dir=data_dir)
+        else:
+            raise ZhijiError(
+                f"未知的会话存储后端: {mode}",
+                hint=f"可选值 {DB_BACKEND} / {JSON_BACKEND}（环境变量 {CHAT_BACKEND_ENV}）",
+            )
+        self._store = store
+        self.backend_name = store.backend_name
+        self.location = store.location
+
+    def list(self) -> list[Conversation]:
+        return self._store.list()
+
+    def get(self, conversation_id: str) -> Conversation:
+        return self._store.get(conversation_id)
+
+    def create(self, title: str = DEFAULT_TITLE, model_name: str | None = None) -> Conversation:
+        return self._store.create(title, model_name)
+
+    def update(self, conversation_id: str, **changes: str | None) -> Conversation:
+        return self._store.update(conversation_id, **changes)
+
+    def attach_note(
+        self,
+        conversation_id: str,
+        *,
+        platform: str | None = None,
+        source_url: str | None = None,
+        note_content: str | None = None,
+        note_path: str | None = None,
+        title: str | None = None,
+    ) -> Conversation:
+        return self._store.attach_note(
+            conversation_id,
+            platform=platform,
+            source_url=source_url,
+            note_content=note_content,
+            note_path=note_path,
+            title=title,
+        )
+
+    def delete(self, conversation_id: str) -> None:
+        self._store.delete(conversation_id)
+
+    def append_message(
+        self, conversation_id: str, role: ChatRole, content: str
+    ) -> Conversation:
+        return self._store.append_message(conversation_id, role, content)
+
+
+def _resolve_database(data_dir: str | Path | None) -> Database:
+    """没有显式 data_dir 时复用进程级数据库；否则用该目录下的 zhiji.db。"""
+
+    if data_dir is None:
+        return get_database()
+    directory = Path(data_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    return get_database(f"sqlite:///{(directory / DEFAULT_DB_FILENAME).as_posix()}")
+
+
+def _as_utc(value: datetime) -> datetime:
+    """SQLite 不保存时区，读回来的是同一个 UTC 时刻，这里补回 tzinfo。"""
+
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+
+def conversation_to_row(conversation: Conversation) -> ConversationRow:
+    """Pydantic 会话 -> ORM 行（含消息），建库与迁移脚本共用。"""
+
+    row = ConversationRow(
+        id=conversation.id,
+        title=conversation.title,
+        model_name=conversation.model_name,
+        platform=conversation.platform,
+        source_url=conversation.source_url,
+        note_content=conversation.note_content,
+        note_path=conversation.note_path,
+        created_at=conversation.created_at,
+        updated_at=conversation.updated_at,
+    )
+    row.messages = [
+        ConversationMessageRow(
+            role=message.role, content=message.content, created_at=message.created_at
+        )
+        for message in conversation.messages
+    ]
+    return row
+
+
+def row_to_conversation(row: ConversationRow) -> Conversation:
+    """ORM 行 -> Pydantic 会话，消息按写入顺序排列。"""
+
+    return Conversation(
+        id=row.id,
+        title=row.title,
+        model_name=row.model_name,
+        platform=row.platform,
+        source_url=row.source_url,
+        note_content=row.note_content,
+        note_path=row.note_path,
+        created_at=_as_utc(row.created_at),
+        updated_at=_as_utc(row.updated_at),
+        messages=[
+            ChatMessage(
+                role=cast(ChatRole, message.role),
+                content=message.content,
+                created_at=_as_utc(message.created_at),
+            )
+            for message in row.messages
+        ],
+    )
 
 
 def build_chat_messages(conversation: Conversation, source_context: str | None = None) -> list[dict]:
