@@ -1,4 +1,11 @@
-"""配置加载、持久化与多模型管理。"""
+"""配置加载、持久化与多模型管理。
+
+模型配置与全局设置默认写入数据库（``model_configs`` / ``app_settings`` 两张
+表），同时在 ``self.path`` 的 JSON 文件里保留一份导出，既兼容旧有的
+``config/zhiji.json``，也方便人工查看与回退。首次使用且数据库为空时，会从
+该 JSON 文件导入一次。把环境变量 ``ZHIJI_CONFIG_BACKEND`` 设为 ``json`` 可
+切回纯文件后端。
+"""
 
 from __future__ import annotations
 
@@ -8,11 +15,21 @@ from pathlib import Path
 from dotenv import load_dotenv
 from pydantic import ValidationError
 
-from zhiji.errors import ConfigError, OutputWriteError
+from zhiji.errors import ConfigError, OutputWriteError, ZhijiError
 from zhiji.models import AppConfig, AppSettings, LLMModelConfig
+from zhiji.storage import Database, get_database
+from zhiji.storage.config_repository import ConfigRepository
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
+
+#: 配置存储后端：db（默认，数据库 + JSON 导出）或 json（旧版纯文件）。
+CONFIG_BACKEND_ENV = "ZHIJI_CONFIG_BACKEND"
+DB_BACKEND = "db"
+JSON_BACKEND = "json"
+
+#: 显式指定配置文件时，数据库落在同目录下的这个文件名里。
+DEFAULT_DB_FILENAME = "zhiji.db"
 
 
 def default_config_path() -> Path:
@@ -24,6 +41,18 @@ def default_config_path() -> Path:
     return PROJECT_ROOT / "config" / "zhiji.json"
 
 
+def read_config_file(path: str | Path) -> AppConfig:
+    """读取并校验 JSON 配置文件；文件不存在时返回默认配置。"""
+
+    target = Path(path).expanduser()
+    if not target.exists():
+        return AppConfig()
+    try:
+        return AppConfig.model_validate_json(target.read_text(encoding="utf-8"))
+    except (ValidationError, OSError, ValueError) as exc:
+        raise ConfigError("配置文件解析失败", hint=f"{target}: {exc}") from exc
+
+
 def mask_api_key(value: str) -> str:
     if not value:
         return ""
@@ -33,22 +62,61 @@ def mask_api_key(value: str) -> str:
 
 
 class ConfigManager:
-    """负责 config/zhiji.json 的读写与模型 CRUD。"""
+    """模型与全局设置的读写门面。
 
-    def __init__(self, path: str | Path | None = None) -> None:
+    默认数据库后端：显式传入 ``path`` 时，数据库落在同目录的 ``zhiji.db``；
+    不传 ``path`` 时复用进程级数据库（``ZHIJI_DATABASE_URL`` 或项目内
+    ``data/zhiji.db``）。无论哪种后端，写操作都会把配置导出到 ``self.path``
+    的 JSON 文件，因此旧文件仍是可靠的回退与快照。
+    """
+
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        *,
+        backend: str | None = None,
+        database: Database | None = None,
+    ) -> None:
         self.path = Path(path).expanduser() if path else default_config_path()
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        mode = (backend or os.getenv(CONFIG_BACKEND_ENV) or DB_BACKEND).strip().lower()
+        if mode not in (DB_BACKEND, JSON_BACKEND):
+            raise ZhijiError(
+                f"未知的配置存储后端: {mode}",
+                hint=f"可选值 {DB_BACKEND} / {JSON_BACKEND}（环境变量 {CONFIG_BACKEND_ENV}）",
+            )
+        self.backend_name = mode
+        self._repository: ConfigRepository | None = None
+        if mode == DB_BACKEND:
+            if database is not None:
+                db = database
+            elif path is not None:
+                db = get_database(f"sqlite:///{(self.path.parent / DEFAULT_DB_FILENAME).as_posix()}")
+            else:
+                db = get_database()
+            self._repository = ConfigRepository(db)
+            self.location = db.url
+        else:
+            self.location = str(self.path)
         self._config = self._load()
 
     def _load(self) -> AppConfig:
-        if not self.path.exists():
-            return AppConfig()
-        try:
-            return AppConfig.model_validate_json(self.path.read_text(encoding="utf-8"))
-        except (ValidationError, OSError, ValueError) as exc:
-            raise ConfigError("配置文件解析失败", hint=f"{self.path}: {exc}") from exc
+        if self._repository is None:
+            return read_config_file(self.path)
+        existing = self._repository.load()
+        if existing is not None:
+            return existing
+        # 数据库为空：从 JSON 文件导入一次，并把结果写回数据库。
+        imported = read_config_file(self.path)
+        self._repository.save(imported)
+        return imported
 
     def save(self) -> None:
+        if self._repository is not None:
+            self._repository.save(self._config)
+        self._write_file()
+
+    def _write_file(self) -> None:
         tmp = self.path.with_suffix(".json.tmp")
         try:
             tmp.write_text(self._config.model_dump_json(indent=2), encoding="utf-8")
@@ -60,7 +128,11 @@ class ConfigManager:
         return self._config
 
     def reload(self) -> AppConfig:
-        self._config = self._load()
+        if self._repository is not None:
+            loaded = self._repository.load()
+            self._config = loaded if loaded is not None else read_config_file(self.path)
+        else:
+            self._config = read_config_file(self.path)
         return self._config
 
     def add_model(self, model: LLMModelConfig, *, make_default: bool | None = None) -> LLMModelConfig:

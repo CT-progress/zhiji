@@ -39,7 +39,7 @@
 | 应用层 | `chat.py` | 201 | 对话式交互 |
 | | `cli.py` | 262 | Typer 命令行入口 |
 | | `pipeline.py` | 229 | 抓取→转写→加工→写出的编排 |
-| | `config.py` / `models.py` | 128 / 126 | 配置与数据模型（pydantic） |
+| | `config.py` / `models.py` | — | 配置门面与数据模型；配置默认入库（阶段 1.3） |
 | | `errors.py` / `tmpfiles.py` | 46 / 34 | 错误与临时文件 |
 | Web | `web/app.py` | 515 | FastAPI 应用（含内嵌静态页） |
 | | `web/static/*` | — | config.html / app.css / app.js |
@@ -615,7 +615,7 @@ graph TD
 | `writers/markdown.py` | 写出后端 | 扩展 Obsidian REST 后端 |
 | `web/app.py` | 早期 API（过渡） | P4 后由 Java 控制面替代 |
 | `cli.py` | 运维/调试工具 | 保留 |
-| `config/zhiji.json` | 配置中心/DB | 逐步迁移，凭据部分必须迁移 |
+| `config/zhiji.json` | JSON 导出 + 回退源 | 模型/设置已入库（阶段 1.3）；API Key 加密见阶段 4 |
 | `data/*-profile.json` | 凭据保险库 | **必须迁移并加密** |
 
 ### 9.2 术语

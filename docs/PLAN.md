@@ -2,7 +2,7 @@
 
 > 版本：v1.0 　编制日期：2026-10-09
 > 配套文档：`docs/ARCHITECTURE.md`（架构设计，回答"为什么这样设计"）；本文回答"具体怎么做、按什么顺序做"。
-> 代码基线：本地 `main`（已含阶段 1 的迭代 1.1 / 1.2，按约定暂不推送）
+> 代码基线：本地 `main`（已含阶段 1 的迭代 1.1 / 1.2 / 1.3，按约定暂不推送）
 
 ---
 
@@ -14,7 +14,7 @@
 | **总体路线** | 6 个阶段：工程底座 → 持久化 → 异步任务 → 账号隔离 → 凭据安全 → 容器部署 |
 | **语言策略** | 先用 Python 打通业务闭环；Java 控制面放到最后的可选阶段 |
 | **实施原则** | 不重写、只叠加；每一步测试全绿；每一步可独立回滚 |
-| **当前状态** | 阶段 0 已完成；阶段 1 的 1.1 数据库底座、1.2 会话落库已完成（本机提交） |
+| **当前状态** | 阶段 0 已完成；阶段 1 的 1.1 数据库底座、1.2 会话落库、1.3 配置入库均已完成（本机提交） |
 
 ---
 
@@ -116,7 +116,7 @@
 | --- | --- | --- |
 | ✅ **1.1 数据库底座** | 新增 SQLAlchemy 依赖；`storage/` 模块（engine / session / 表 / 仓储）；`ZHIJI_DATABASE_URL` 配置；任务表 CRUD；单元测试 | 默认生成 `data/zhiji.db`；任务表可增删查改；三件套全绿 |
 | ✅ **1.2 会话落库** | `ChatStore` 从 JSON 改为数据库后端；保留一次性迁移脚本与回退开关 | 老会话可平滑迁移；`test_chat_store` 全绿 |
-| **1.3 配置入库** | 模型配置（`config/zhiji.json`）迁入数据库；支持从文件导入 | 现有模型配置可导入；Web 配置页功能不回退 |
+| ✅ **1.3 配置入库** | 模型配置（`config/zhiji.json`）迁入数据库；支持从文件导入 | 现有模型配置可导入；Web 配置页功能不回退 |
 
 **新增 / 改动**
 
@@ -126,7 +126,12 @@
   会话与消息分表存储（每次追加只 INSERT 一行，因此并发追加不丢消息）
 - 新增 `src/zhiji/migrate.py`：`python -m zhiji.migrate [--dry-run]` 把旧 JSON 会话导入数据库（幂等）
 - `.env.example`：+ `ZHIJI_DATABASE_URL`、+ `ZHIJI_CHAT_BACKEND`（`db` 默认 / `json` 回退）
-- 测试：`tests/test_storage.py`、`tests/test_chat_store.py`、`tests/test_migrate.py`
+- `src/zhiji/config.py`：`ConfigManager` 新增数据库后端（`model_configs` / `app_settings`），
+  首次使用从 JSON 导入，写操作同时导出 JSON；`ZHIJI_CONFIG_BACKEND=json` 回退纯文件
+- 新增 `src/zhiji/storage/config_repository.py`：配置 ORM 读写与整体替换语义
+- `src/zhiji/migrate.py`：`python -m zhiji.migrate --config config/zhiji.json` 导入模型/设置
+- 测试：`tests/test_storage.py`、`tests/test_chat_store.py`、`tests/test_migrate.py`、
+  `tests/test_config_db.py`
 
 **关键决策**：默认 **SQLite**（零运维、单机足够），通过 URL 切换 **PostgreSQL**（生产）。SQLAlchemy 让同一套代码适配两者。
 
@@ -248,16 +253,15 @@
 
 ## 9. 下一步
 
-**进入阶段 1 · 迭代 1.3：配置入库**
+**进入阶段 2 · 迭代 2.1：任务状态机**
 
 具体内容：
 
-1. 新增 `model_configs` 表，把 `config/zhiji.json` 里的模型配置（provider / name / base_url / api_key / default）迁入数据库；
-2. `ConfigManager` 变成"数据库优先 + 文件导入/回退"，Web 配置页读写数据库；
-3. 同步更新 `.env.example` 与 `docs/ARCHITECTURE.md`；
-4. 跑三件套验证。
+1. 在 `storage/repository.py` 基础上补齐 `PENDING / RUNNING / SUCCEEDED / FAILED / CANCELLED` 的状态流转校验；
+2. 非法流转（如 `SUCCEEDED -> RUNNING`）明确拒绝并落库失败原因；
+3. 补测试覆盖合法/非法流转，跑三件套验证。
 
-**验收**：现有模型配置可一键导入；Web 配置页 CRUD 表现与现在一致；pytest / ruff / mypy 全绿。
+**验收**：状态流转有测试覆盖，非法流转被拒绝。
 
 ### 迭代记录
 
@@ -265,3 +269,4 @@
 | --- | --- | --- |
 | 1.1 数据库底座 | ✅ 完成 | 120 passed / ruff 全绿 / mypy 36 files |
 | 1.2 会话落库 | ✅ 完成 | 138 passed / ruff 全绿 / mypy 37 files；22 个真实会话、54 条消息迁移后与 JSON 一致 |
+| 1.3 配置入库 | ✅ 完成 | 153 passed / ruff 全绿 / mypy 38 files；真实 3 个模型与设置已导入 `data/zhiji.db`，JSON 保留 |

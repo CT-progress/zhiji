@@ -8,9 +8,11 @@ from pathlib import Path
 import pytest
 
 from zhiji.chat import JSON_BACKEND, ChatNotFoundError, ChatStore
+from zhiji.config import ConfigManager, read_config_file
 from zhiji.errors import ZhijiError
-from zhiji.migrate import load_conversations, main, migrate_conversations
-from zhiji.storage import Database
+from zhiji.migrate import import_config, load_conversations, main, migrate_conversations
+from zhiji.models import LLMModelConfig
+from zhiji.storage import ConfigRepository, Database
 
 
 @pytest.fixture()
@@ -106,3 +108,69 @@ def test_main_migrates_into_explicit_database(
     assert main(["--json", str(json_path), "--database", url]) == 0
     assert "导入 1 个" in capsys.readouterr().out
     assert db_path.exists()
+
+
+def _config_json(tmp_path: Path) -> Path:
+    """用 JSON 后端造一份旧配置文件。"""
+
+    path = tmp_path / "zhiji.json"
+    cm = ConfigManager(path, backend=JSON_BACKEND)
+    cm.add_model(LLMModelConfig(name="DeepSeek", api_key="sk-1", default=True))
+    cm.update_settings({"output_dir": "notes", "keep_audio": True})
+    return path
+
+
+def test_import_config_writes_models_and_settings(tmp_path: Path, database: Database) -> None:
+    path = _config_json(tmp_path)
+    result = import_config(read_config_file(path), database)
+    assert (result.imported, result.models) == (True, 1)
+
+    cm = ConfigManager(tmp_path / "loaded.json", database=database)
+    model = cm.get_model("DeepSeek")
+    assert model is not None
+    assert model.api_key == "sk-1"
+    assert cm.get().settings.output_dir == "notes"
+    assert cm.get().settings.keep_audio is True
+
+
+def test_import_config_skips_when_already_present(tmp_path: Path, database: Database) -> None:
+    path = _config_json(tmp_path)
+    import_config(read_config_file(path), database)
+    again = import_config(read_config_file(path), database)
+    assert (again.imported, again.dry_run) == (False, False)
+
+
+def test_import_config_dry_run_writes_nothing(tmp_path: Path, database: Database) -> None:
+    path = _config_json(tmp_path)
+    result = import_config(read_config_file(path), database, dry_run=True)
+    assert (result.imported, result.dry_run) == (False, True)
+    assert ConfigRepository(database).load() is None
+
+
+def test_main_imports_config_into_explicit_database(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _config_json(tmp_path)
+    db_path = tmp_path / "zhiji.db"
+    url = f"sqlite:///{db_path.as_posix()}"
+
+    assert main(["--config", str(path), "--database", url]) == 0
+    assert "导入 1 个" in capsys.readouterr().out
+    assert db_path.exists()
+
+
+def test_main_config_reports_missing_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["--config", str(tmp_path / "nope.json")]) == 0
+    assert "无需导入" in capsys.readouterr().out
+
+
+def test_main_config_dry_run_reports_plan(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _config_json(tmp_path)
+    url = f"sqlite:///{(tmp_path / 'zhiji.db').as_posix()}"
+    assert main(["--config", str(path), "--database", url, "--dry-run"]) == 0
+    assert "将导入 1 个" in capsys.readouterr().out
+    assert ConfigRepository(Database(url)).load() is None

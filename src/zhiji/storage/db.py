@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -13,12 +14,32 @@ from sqlalchemy.exc import ArgumentError, NoSuchModuleError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from zhiji.config import PROJECT_ROOT
 from zhiji.errors import StorageError
 from zhiji.storage.tables import Base
 
+#: 项目根目录。这里本地定义，避免 db <- config <- storage 的循环导入。
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
 DEFAULT_DB_RELATIVE = Path("data") / "zhiji.db"
 DATABASE_URL_ENV = "ZHIJI_DATABASE_URL"
+
+_LOCKS: dict[str, threading.RLock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def lock_for_key(key: str) -> threading.RLock:
+    """进程内按资源名复用可重入锁。
+
+    SQLite 这类单写者数据库在「先读后写」的事务里容易撞上 database is locked，
+    写操作外面套一把进程内锁即可避免；key 用数据库 URL，保证同一个库共锁。
+    """
+
+    with _LOCKS_GUARD:
+        lock = _LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _LOCKS[key] = lock
+        return lock
 
 
 def default_database_url() -> str:

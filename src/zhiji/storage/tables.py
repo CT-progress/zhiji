@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from zhiji.models import TaskStatus
@@ -93,3 +93,48 @@ class ConversationMessageRow(Base):
 
     def __repr__(self) -> str:
         return f"<ConversationMessageRow id={self.id!r} role={self.role!r}>"
+
+
+#: app_settings 是单行表，固定使用这一行的主键。
+SETTINGS_ROW_ID = 1
+
+
+class ModelConfigRow(Base):
+    """模型配置表：字段与 zhiji.models.LLMModelConfig 一一对应。"""
+
+    __tablename__ = "model_configs"
+
+    name: Mapped[str] = mapped_column(String(120), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    base_url: Mapped[str] = mapped_column(String(500), default="")
+    api_key: Mapped[str] = mapped_column(Text, default="")
+    model: Mapped[str] = mapped_column(String(120), default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<ModelConfigRow name={self.name!r}>"
+
+
+class AppSettingsRow(Base):
+    """全局设置表（单行）：字段与 zhiji.models.AppSettings 对应。"""
+
+    __tablename__ = "app_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=SETTINGS_ROW_ID)
+    output_dir: Mapped[str] = mapped_column(String(500), default="output")
+    whisper_model: Mapped[str] = mapped_column(String(64), default="small")
+    whisper_device: Mapped[str] = mapped_column(String(32), default="cpu")
+    keep_audio: Mapped[bool] = mapped_column(Boolean, default=False)
+    platforms_json: Mapped[str] = mapped_column(Text, default="{}")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<AppSettingsRow id={self.id!r} output_dir={self.output_dir!r}>"

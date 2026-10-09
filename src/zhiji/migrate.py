@@ -5,6 +5,7 @@
     python -m zhiji.migrate                      # 迁移 data/conversations.json
     python -m zhiji.migrate --dry-run            # 只统计，不写入
     python -m zhiji.migrate --json other.json --database sqlite:///data/zhiji.db
+    python -m zhiji.migrate --config config/zhiji.json   # 只导入模型/设置
 
 迁移是幂等的：已经存在的会话 id 会被跳过，源文件保持不动。
 """
@@ -17,8 +18,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from zhiji.chat import DATA_DIR, Conversation, conversation_to_row
+from zhiji.config import read_config_file
 from zhiji.errors import ZhijiError
-from zhiji.storage import ConversationRow, Database, get_database
+from zhiji.models import AppConfig
+from zhiji.storage import ConfigRepository, ConversationRow, Database, get_database
 
 
 @dataclass(frozen=True)
@@ -76,6 +79,33 @@ def migrate_conversations(
     )
 
 
+@dataclass(frozen=True)
+class ConfigImportResult:
+    """一次模型/设置导入的统计结果。"""
+
+    models: int
+    imported: bool
+    dry_run: bool = False
+
+
+def import_config(
+    config: AppConfig,
+    database: Database,
+    *,
+    dry_run: bool = False,
+    overwrite: bool = False,
+) -> ConfigImportResult:
+    """把 JSON 配置写入数据库；数据库已有配置时跳过，overwrite=True 才覆盖。"""
+
+    repository = ConfigRepository(database)
+    if not overwrite and not repository.is_empty():
+        return ConfigImportResult(models=len(config.models), imported=False, dry_run=dry_run)
+    if dry_run:
+        return ConfigImportResult(models=len(config.models), imported=False, dry_run=True)
+    repository.save(config)
+    return ConfigImportResult(models=len(config.models), imported=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m zhiji.migrate",
@@ -93,8 +123,31 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="目标数据库连接串，默认 ZHIJI_DATABASE_URL 或项目内 data/zhiji.db",
     )
+    parser.add_argument(
+        "--config",
+        dest="config_path",
+        default=None,
+        help="改为导入模型/设置配置文件（如 config/zhiji.json）",
+    )
     parser.add_argument("--dry-run", action="store_true", help="只统计不写入")
     args = parser.parse_args(argv)
+
+    if args.config_path:
+        config_path = Path(args.config_path)
+        if not config_path.exists():
+            print(f"未找到配置文件：{config_path}（无需导入）")
+            return 0
+        config = read_config_file(config_path)
+        database = Database(args.database_url) if args.database_url else get_database()
+        config_result = import_config(config, database, dry_run=args.dry_run)
+        if config_result.dry_run:
+            print(f"[dry-run] 将导入 {config_result.models} 个模型配置 -> {database.url}")
+        elif config_result.imported:
+            print(f"导入 {config_result.models} 个模型配置 -> {database.url}")
+            print(f"源文件保留：{config_path}")
+        else:
+            print(f"数据库已有配置，跳过导入（{database.url}）")
+        return 0
 
     json_path = Path(args.json_path)
     if not json_path.exists():
