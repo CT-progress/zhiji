@@ -9,7 +9,43 @@
 
 </head>
 <body>
-<div class="app">
+<div class="auth-page hidden" id="auth-page">
+  <main class="auth-card">
+    <div class="auth-brand">
+      <div class="brand-mark auth-mark">知</div>
+      <div>
+        <div class="brand-name">知记 zhiji</div>
+        <div class="brand-sub">把内容整理成可复用的笔记</div>
+      </div>
+    </div>
+    <div class="auth-copy">
+      <h1 id="auth-title">欢迎回来</h1>
+      <p id="auth-subtitle">登录后继续使用你的笔记与会话</p>
+    </div>
+    <div class="auth-tabs" role="tablist" aria-label="账号入口">
+      <button class="auth-tab active" id="auth-tab-login" data-mode="login" type="button" role="tab">登录</button>
+      <button class="auth-tab" id="auth-tab-register" data-mode="register" type="button" role="tab">注册</button>
+    </div>
+    <form class="auth-form" id="auth-form" novalidate>
+      <div class="auth-field" id="auth-display-field">
+        <label for="auth-display-name">显示名称</label>
+        <input id="auth-display-name" name="display_name" type="text" autocomplete="name" maxlength="80" placeholder="可留空">
+      </div>
+      <div class="auth-field">
+        <label for="auth-username">用户名</label>
+        <input id="auth-username" name="username" type="text" autocomplete="username" required maxlength="32" placeholder="3-32 位字母、数字或 _ . -">
+      </div>
+      <div class="auth-field">
+        <label for="auth-password">密码</label>
+        <input id="auth-password" name="password" type="password" autocomplete="current-password" required minlength="8" placeholder="至少 8 位">
+      </div>
+      <div class="auth-error hidden" id="auth-error" role="alert"></div>
+      <button class="btn primary auth-submit" id="auth-submit" type="submit">登录</button>
+    </form>
+    <div class="auth-hint" id="auth-hint">还没有账号？切换到「注册」即可创建。</div>
+  </main>
+</div>
+<div class="app hidden" id="app-shell">
   <aside class="sidebar" id="sidebar">
     <div class="brand">
       <div class="brand-mark">知</div>
@@ -30,6 +66,10 @@
       <button class="foot-btn" id="btn-settings" type="button">
         <i data-lucide="settings"></i><span>设置</span>
       </button>
+      <div class="user-mini hidden" id="user-mini">
+        <i data-lucide="user-round"></i><span id="user-name"></span>
+        <button class="logout-btn" id="btn-logout" type="button">退出</button>
+      </div>
       <div class="model-mini">
         <i data-lucide="cpu"></i><span id="model-mini-text">未配置模型</span>
       </div>

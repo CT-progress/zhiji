@@ -58,10 +58,11 @@ NOTE_TASK_TYPE = "note.generate"
 #: 账号鉴权开关；默认关闭以保持本机零配置可直接使用。
 REQUIRE_AUTH_ENV = "ZHIJI_REQUIRE_AUTH"
 
-#: 账号鉴权模式下无需登录即可访问的接口（注册 / 登录 / 登出 / 健康检查）。
+#: 账号鉴权模式下无需登录即可访问的接口（状态 / 注册 / 登录 / 登出 / 健康检查）。
 PUBLIC_API_PATHS = frozenset(
     {
         "/api/health",
+        "/api/auth/status",
         "/api/auth/register",
         "/api/auth/login",
         "/api/auth/logout",
@@ -472,6 +473,16 @@ def create_app(
     @app.get("/api/health")
     def health() -> dict:
         return {"ok": True, "config": str(config.path)}
+
+    @app.get("/api/auth/status")
+    def auth_status(request: Request) -> dict:
+        """返回前端启动所需的最小鉴权状态，不暴露敏感信息。"""
+
+        user = _current_user(request) if require_auth else None
+        return {
+            "require_auth": require_auth,
+            "user": _user_public(user) if user is not None else None,
+        }
 
     @app.get("/")
     def index() -> FileResponse:

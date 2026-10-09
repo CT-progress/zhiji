@@ -19,17 +19,180 @@ const state = {
   busy: false,
   settingsTab: 'models',
   editingModelName: null,
+  authRequired: false,
+  authMode: 'login',
+  currentUser: null,
 };
 const PLATFORM_BADGES = { douyin: '抖音', bilibili: 'B站', zhihu: '知乎', xiaohongshu: '小红书' };
 const ACTIVE_TASK_KEY = 'zhiji.activeTaskId';
 
 async function init() {
   bindUI();
+  await loadAuthStatus();
+  if (state.authRequired && !state.currentUser) {
+    showAuth();
+    return;
+  }
+  await startApp();
+}
+
+async function loadAuthStatus() {
+  try {
+    const data = await api('/api/auth/status');
+    state.authRequired = Boolean(data.require_auth);
+    state.currentUser = data.user || null;
+  } catch (err) {
+    state.authRequired = false;
+    state.currentUser = null;
+  }
+  updateAuthChrome();
+}
+
+async function startApp() {
+  closeSettings();
+  $('auth-page').classList.add('hidden');
+  $('app-shell').classList.remove('hidden');
+  updateAuthChrome();
   await Promise.all([loadModels(), loadSettings(), loadPlatforms()]);
   await loadConversations();
   checkHealth();
   showHome();
   restoreActiveTask().catch(() => {});
+}
+
+function updateAuthChrome() {
+  const user = state.currentUser;
+  const visible = Boolean(state.authRequired && user);
+  $('user-mini').classList.toggle('hidden', !visible);
+  if (visible) $('user-name').textContent = user.display_name || user.username || '';
+}
+
+function resetBusinessState() {
+  state.conversationId = null;
+  state.activeConv = null;
+  state.activeMessages = [];
+  state.note = null;
+  state.genSteps = [];
+  state.rawText = '';
+  state.generating = false;
+  state.activeTaskId = null;
+  state.activeTaskDone = false;
+  state.model = null;
+  state.models = [];
+  state.conversations = [];
+  state.settings = null;
+  state.platforms = [];
+  state.platform = null;
+  state.editingModelName = null;
+  $('conv-list').innerHTML = '';
+  $('model-select').innerHTML = '';
+  $('model-mini-text').textContent = '未配置模型';
+  $('wrap').innerHTML = '';
+  $('composer-wrap').classList.add('hidden');
+  $('conv-title').textContent = '新建笔记';
+  $('conv-meta').textContent = '';
+  localStorage.removeItem(ACTIVE_TASK_KEY);
+}
+
+function showAuth(message) {
+  resetBusinessState();
+  state.currentUser = null;
+  setAuthMode('login');
+  $('auth-page').classList.remove('hidden');
+  $('app-shell').classList.add('hidden');
+  $('settings-page').classList.add('hidden');
+  updateAuthChrome();
+  if (message) showAuthError(message);
+  window.setTimeout(() => $('auth-username').focus(), 0);
+}
+
+function setAuthMode(mode) {
+  state.authMode = mode === 'register' ? 'register' : 'login';
+  const registering = state.authMode === 'register';
+  $('auth-tab-login').classList.toggle('active', !registering);
+  $('auth-tab-register').classList.toggle('active', registering);
+  $('auth-tab-login').setAttribute('aria-selected', String(!registering));
+  $('auth-tab-register').setAttribute('aria-selected', String(registering));
+  $('auth-display-field').classList.toggle('hidden', !registering);
+  $('auth-title').textContent = registering ? '创建账号' : '欢迎回来';
+  $('auth-subtitle').textContent = registering
+    ? '账号创建后，笔记与会话将只属于你'
+    : '登录后继续使用你的笔记与会话';
+  $('auth-submit').textContent = registering ? '注册并登录' : '登录';
+  $('auth-hint').textContent = registering
+    ? '用户名只支持字母、数字、下划线、点和连字符。'
+    : '还没有账号？切换到「注册」即可创建。';
+  $('auth-password').setAttribute('autocomplete', registering ? 'new-password' : 'current-password');
+  clearAuthError();
+}
+
+function clearAuthError() {
+  const error = $('auth-error');
+  error.textContent = '';
+  error.classList.add('hidden');
+}
+
+function showAuthError(message) {
+  const error = $('auth-error');
+  error.textContent = message || '操作失败，请稍后重试';
+  error.classList.remove('hidden');
+}
+
+async function submitAuth(event) {
+  event.preventDefault();
+  const username = $('auth-username').value.trim();
+  const password = $('auth-password').value;
+  const displayName = $('auth-display-name').value.trim();
+  if (!username || !password) {
+    showAuthError('请输入用户名和密码');
+    return;
+  }
+
+  const submit = $('auth-submit');
+  const registering = state.authMode === 'register';
+  submit.disabled = true;
+  submit.textContent = registering ? '注册中...' : '登录中...';
+  try {
+    if (registering) {
+      const payload = { username, password };
+      if (displayName) payload.display_name = displayName;
+      await api('/api/auth/register', { method: 'POST', body: JSON.stringify(payload) });
+      setAuthMode('login');
+      $('auth-username').value = username;
+    }
+    const loggedIn = await api('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    });
+    state.authRequired = true;
+    state.currentUser = loggedIn.user || null;
+    $('auth-password').value = '';
+    toast(registering ? '注册成功，已登录' : '登录成功');
+    await startApp();
+  } catch (err) {
+    showAuthError(err.message || '操作失败，请稍后重试');
+  } finally {
+    submit.disabled = false;
+    submit.textContent = state.authMode === 'register' ? '注册并登录' : '登录';
+  }
+}
+
+async function logout() {
+  const button = $('btn-logout');
+  button.disabled = true;
+  try {
+    await api('/api/auth/logout', { method: 'POST' });
+  } catch (err) {
+    // 即使服务端清理失败，也先回到登录页，避免继续显示上一个用户的数据。
+  } finally {
+    button.disabled = false;
+    showAuth('已退出登录');
+  }
+}
+
+function handleUnauthorized() {
+  if (!state.authRequired) return;
+  showAuth('登录已过期，请重新登录');
 }
 
 async function checkHealth() {
@@ -45,6 +208,10 @@ function bindUI() {
   $('btn-new').addEventListener('click', showHome);
   $('btn-settings').addEventListener('click', openSettings);
   $('btn-close-settings').addEventListener('click', closeSettings);
+  $('auth-form').addEventListener('submit', submitAuth);
+  $('auth-tab-login').addEventListener('click', () => setAuthMode('login'));
+  $('auth-tab-register').addEventListener('click', () => setAuthMode('register'));
+  $('btn-logout').addEventListener('click', logout);
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !$('settings-page').classList.contains('hidden')) closeSettings();
   });
@@ -68,6 +235,9 @@ function bindUI() {
 async function api(path, options = {}) {
   const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
   if (!res.ok) {
+    if (res.status === 401 && state.authRequired && !path.startsWith('/api/auth/')) {
+      handleUnauthorized();
+    }
     const data = await res.json().catch(() => ({}));
     const detail = data.detail || data.error || {};
     const msg = detail.message || detail.title || data.detail || '请求失败';
@@ -79,6 +249,7 @@ async function api(path, options = {}) {
 async function readSSE(path, options, onEvent) {
   const res = await fetch(path, options);
   if (!res.ok) {
+    if (res.status === 401 && state.authRequired) handleUnauthorized();
     const data = await res.json().catch(() => ({}));
     const detail = data.detail || data.error || {};
     throw new Error(detail.message || detail.title || '请求失败');

@@ -14,6 +14,7 @@ from zhiji.web.app import create_app
 
 PROTECTED = "/api/models"
 WHOAMI = "/api/auth/me"
+STATUS = "/api/auth/status"
 HEALTH = "/api/health"
 USERNAME = "alice"
 PASSWORD = "password123"
@@ -64,6 +65,9 @@ def test_require_auth_blocks_anonymous_but_allows_public(tmp_path: Path) -> None
     assert client.get(WHOAMI).status_code == 401
     # 公开资源不受影响
     assert client.get(HEALTH).status_code == 200
+    status = client.get(STATUS)
+    assert status.status_code == 200
+    assert status.json() == {"require_auth": True, "user": None}
     assert client.get("/").status_code == 200
     assert client.get("/static/app.js").status_code == 200
     # 未登录也能注册 / 登录
@@ -77,6 +81,11 @@ def test_require_auth_allows_valid_session(tmp_path: Path) -> None:
     login = _login(client)
     assert login.status_code == 200
     assert login.json()["token"]
+
+    status = client.get(STATUS)
+    assert status.status_code == 200
+    assert status.json()["require_auth"] is True
+    assert status.json()["user"]["username"] == USERNAME
 
     # 登录后自动带上会话 Cookie，受保护接口放行
     assert client.get(PROTECTED).status_code == 200
@@ -133,6 +142,7 @@ def test_require_auth_env_enables_gate(tmp_path: Path, monkeypatch: pytest.Monke
 def test_default_mode_remains_open(tmp_path: Path) -> None:
     client = _client(tmp_path)
     assert client.get(PROTECTED).status_code == 200
+    assert client.get(STATUS).json() == {"require_auth": False, "user": None}
 
 
 # ---------- 旧版令牌兼容 ----------

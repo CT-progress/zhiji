@@ -408,6 +408,9 @@ def test_frontend_assets_split_from_html(tmp_path):
     assert index.status_code == 200
     assert "/static/app.css" in index.text
     assert "/static/app.js" in index.text
+    assert 'id="auth-page"' in index.text
+    assert 'id="auth-form"' in index.text
+    assert 'id="btn-logout"' in index.text
     # 不再内联 <style> / 大段 <script>
     assert "<style>" not in index.text
     assert "<script>\n" not in index.text
