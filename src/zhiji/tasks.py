@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 import threading
+from collections import deque
 from collections.abc import Callable
 from typing import Any
 
@@ -33,16 +35,84 @@ DEFAULT_POLL_INTERVAL = 0.5
 EMPTY_RESULT: dict[str, Any] = {}
 
 
-class TaskContext:
-    """传给处理函数的执行上下文：读取参数、上报进度、查询取消。"""
+class TaskEventBus:
+    """进程内任务事件总线：执行侧 ``publish``，SSE 订阅侧 ``subscribe``。
 
-    def __init__(self, row: TaskRow, database: Database, lock: threading.RLock) -> None:
+    只做实时转发、不落库；事件丢失不影响任务状态与结果，订阅者最终都能
+    从任务表读到终态与 ``result``。为兼容“任务先启动、浏览器后订阅”的
+    场景，总线保留一小段事件历史，新订阅者会先收到已有事件。
+    """
+
+    def __init__(self, history_limit: int = 500, max_history_tasks: int = 200) -> None:
+        self._subscribers: dict[str, list[queue.Queue[dict[str, Any]]]] = {}
+        self._history: dict[str, list[dict[str, Any]]] = {}
+        self._history_order: deque[str] = deque()
+        self._history_limit = max(1, history_limit)
+        self._max_history_tasks = max(1, max_history_tasks)
+        self._lock = threading.Lock()
+
+    def subscribe(self, task_id: str) -> queue.Queue[dict[str, Any]]:
+        channel: queue.Queue[dict[str, Any]] = queue.Queue()
+        with self._lock:
+            for event in self._history.get(task_id, ()):
+                channel.put(dict(event))
+            self._subscribers.setdefault(task_id, []).append(channel)
+        return channel
+
+    def publish(self, task_id: str, event: dict[str, Any]) -> None:
+        item = dict(event)
+        with self._lock:
+            history = self._history.get(task_id)
+            if history is None:
+                history = []
+                self._history[task_id] = history
+                self._history_order.append(task_id)
+                while len(self._history_order) > self._max_history_tasks:
+                    expired = self._history_order.popleft()
+                    self._history.pop(expired, None)
+            history.append(item)
+            if len(history) > self._history_limit:
+                del history[: len(history) - self._history_limit]
+            for channel in self._subscribers.get(task_id, ()):
+                channel.put(dict(item))
+
+    def unsubscribe(
+        self,
+        task_id: str,
+        channel: queue.Queue[dict[str, Any]],
+        *,
+        clear_history: bool = False,
+    ) -> None:
+        with self._lock:
+            subscribers = self._subscribers.get(task_id)
+            if subscribers is not None:
+                try:
+                    subscribers.remove(channel)
+                except ValueError:
+                    pass
+                if not subscribers:
+                    self._subscribers.pop(task_id, None)
+            if clear_history and not self._subscribers.get(task_id):
+                self._history.pop(task_id, None)
+                try:
+                    self._history_order.remove(task_id)
+                except ValueError:
+                    pass
+
+
+class TaskContext:
+    """传给处理函数的执行上下文：读取参数、上报进度、推送事件、查询取消。"""
+
+    def __init__(
+        self, row: TaskRow, database: Database, lock: threading.RLock, bus: TaskEventBus
+    ) -> None:
         self.task_id = row.id
         self.task_type = row.type
         self.platform = row.platform
         self.payload: dict[str, Any] = json.loads(row.payload_json or "{}")
         self._database = database
         self._lock = lock
+        self._bus = bus
 
     def report(self, progress: int) -> None:
         """上报 0-100 的进度；任务已取消/结束时静默忽略。"""
@@ -51,7 +121,13 @@ class TaskContext:
             try:
                 TaskRepository(session).update_progress(self.task_id, progress)
             except TaskTransitionError:
-                pass
+                return
+        self._bus.publish(self.task_id, {"progress": progress})
+
+    def emit(self, event: dict[str, Any]) -> None:
+        """向 SSE 订阅者推送一条自定义事件（如 LLM 增量）。"""
+
+        self._bus.publish(self.task_id, event)
 
     def is_cancelled(self) -> bool:
         """任务是否已被取消（或记录已消失）。处理函数据此提前退出。"""
@@ -82,6 +158,7 @@ class TaskWorker:
         self.max_workers = max(1, int(max_workers))
         self.poll_interval = max(0.01, float(poll_interval))
         self._lock = lock_for_key(f"tasks:{self.database.url}")
+        self.bus = TaskEventBus()
         self._wakeup = threading.Event()
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -110,15 +187,24 @@ class TaskWorker:
         platform: str | None = None,
         payload: dict[str, Any] | None = None,
         priority: int = 0,
+        task_id: str | None = None,
     ) -> str:
-        """创建任务并唤醒 worker，立即返回 task id。"""
+        """创建任务并唤醒 worker，立即返回 task id。
+
+        允许调用方预先指定 ``task_id``（例如先订阅事件总线再提交），
+        未指定时由仓储层生成 UUID。
+        """
 
         with self._lock, self.database.session_scope() as session:
-            task_id = TaskRepository(session).create(
-                task_type=task_type, platform=platform, payload=payload, priority=priority
+            new_id = TaskRepository(session).create(
+                task_type=task_type,
+                platform=platform,
+                payload=payload,
+                priority=priority,
+                task_id=task_id,
             ).id
         self._wakeup.set()
-        return task_id
+        return new_id
 
     def cancel(self, task_id: str) -> TaskRow:
         """把未结束的任务置为取消；终态任务不可取消。"""
@@ -195,7 +281,7 @@ class TaskWorker:
         if handler is None:
             self._finish(row.id, TaskStatus.FAILED, error=f"没有注册的任务处理器: {row.type}")
             return
-        context = TaskContext(row, self.database, self._lock)
+        context = TaskContext(row, self.database, self._lock, self.bus)
         try:
             result = handler(context)
         except GenerationCancelledError:

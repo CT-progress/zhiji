@@ -7,7 +7,7 @@ import json
 import queue
 import re
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -39,13 +39,14 @@ from zhiji.llm.client import LLMClient
 from zhiji.models import LLMModelConfig, TaskStatus
 from zhiji.storage import TaskRepository
 from zhiji.storage.tables import TaskRow
-from zhiji.tasks import TaskWorker, get_worker
+from zhiji.tasks import TaskContext, TaskWorker, get_worker
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 CONFIG_HTML = STATIC_DIR / "config.html"
 
 # 异步生成器轮询队列超时的哨兵值（区别于队列里的 None 结束标记）
 _QUEUE_EMPTY = object()
+NOTE_TASK_TYPE = "note.generate"
 
 
 def _queue_get(q: queue.Queue, timeout: float):
@@ -78,6 +79,12 @@ class SubmitTaskRequest(BaseModel):
     platform: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
     priority: int = 0
+
+
+class GenerateNoteRequest(BaseModel):
+    url: str = Field(min_length=1)
+    model: str | None = None
+    conversation_id: str | None = None
 
 
 def _conv_summary(conversation: Conversation) -> dict:
@@ -178,10 +185,119 @@ def create_app(
     store = ChatStore(data_dir)
     task_worker = worker
 
+    def _generate_note_result(
+        *,
+        url: str,
+        model_name: str | None,
+        conversation_id: str | None,
+        on_delta: Callable[[str], None] | None,
+        on_progress: Callable[[str, str, str], None] | None,
+        cancel_callback: Callable[[], bool] | None,
+    ) -> dict[str, Any]:
+        """执行一次笔记流水线，返回前端与任务表共用的结果结构。"""
+
+        from zhiji.pipeline import NotePipeline
+
+        receipt = NotePipeline(config).run(
+            url,
+            model_name=model_name,
+            stream_callback=on_delta,
+            progress_callback=on_progress,
+            cancel_callback=cancel_callback,
+        )
+        markdown = receipt.note_path.read_text(encoding="utf-8")
+        note_body = _strip_frontmatter(markdown)
+        if conversation_id:
+            _get_or_404(store, conversation_id)
+            conversation = store.attach_note(
+                conversation_id,
+                platform=receipt.platform,
+                source_url=url,
+                note_content=note_body,
+                note_path=str(receipt.note_path),
+                title=receipt.title,
+            )
+        else:
+            conversation = store.create(title=(receipt.title or DEFAULT_TITLE)[:60])
+            conversation = store.attach_note(
+                conversation.id,
+                platform=receipt.platform,
+                source_url=url,
+                note_content=note_body,
+                note_path=str(receipt.note_path),
+            )
+        return {
+            "done": True,
+            "note": {
+                "title": receipt.title,
+                "path": str(receipt.note_path),
+                "markdown": note_body,
+                "transcript_path": (
+                    str(receipt.transcript_path) if receipt.transcript_path else None
+                ),
+                "platform": receipt.platform,
+                "source_url": url,
+            },
+            "conversation": _conv_public(conversation),
+            "warnings": receipt.warnings,
+        }
+
+    def _note_progress(context: TaskContext, stage: str, message: str, status: str) -> None:
+        """把流水线阶段映射为任务进度，并向前端转发阶段事件。"""
+
+        start_progress = {
+            "parse": 5,
+            "fetch": 20,
+            "transcribe": 45,
+            "generate": 70,
+            "save": 95,
+        }
+        done_progress = {
+            "parse": 15,
+            "fetch": 40,
+            "transcribe": 65,
+            "generate": 90,
+            "save": 100,
+        }
+        progress = done_progress.get(stage, 99) if status == "ok" else start_progress.get(stage, 1)
+        context.report(progress)
+        context.emit({"stage": stage, "status": status, "message": message})
+
+    def _note_handler(context: TaskContext) -> dict[str, Any]:
+        """``note.generate`` 任务处理器：页面断开也继续执行到终态。"""
+
+        url = str(context.payload.get("url") or "").strip()
+        if not url:
+            raise ValueError("URL 不能为空")
+        model_name = context.payload.get("model") or context.payload.get("model_name")
+        conversation_id = context.payload.get("conversation_id")
+
+        def on_progress(stage: str, message: str, status: str = "start") -> None:
+            _note_progress(context, stage, message, status)
+
+        def on_delta(chunk: str) -> None:
+            context.emit({"delta": chunk})
+
+        return _generate_note_result(
+            url=url,
+            model_name=str(model_name) if model_name else None,
+            conversation_id=str(conversation_id) if conversation_id else None,
+            on_delta=on_delta,
+            on_progress=on_progress,
+            cancel_callback=context.is_cancelled,
+        )
+
+    def _install_note_handler(active: TaskWorker) -> None:
+        """安装默认笔记处理器，同时允许测试或扩展方覆盖它。"""
+
+        if NOTE_TASK_TYPE not in active.handlers:
+            active.handlers[NOTE_TASK_TYPE] = _note_handler
+
     def _resolve_worker() -> TaskWorker:
         nonlocal task_worker
         if task_worker is None:
             task_worker = get_worker()
+        _install_note_handler(task_worker)
         return task_worker
 
     @asynccontextmanager
@@ -331,6 +447,24 @@ def create_app(
             )
         return {"ok": True, "path": str(path)}
 
+    @app.post("/api/note/generate")
+    def generate_note(payload: GenerateNoteRequest) -> dict:
+        url = payload.url.strip()
+        if not url:
+            raise HTTPException(status_code=400, detail="URL 不能为空")
+        if payload.conversation_id:
+            _get_or_404(store, payload.conversation_id)
+        task_payload: dict[str, Any] = {"url": url}
+        if payload.model:
+            task_payload["model"] = payload.model
+        if payload.conversation_id:
+            task_payload["conversation_id"] = payload.conversation_id
+        active = _resolve_worker()
+        # 生成接口必须使用当前应用配置的处理器；低层任务 API 仍允许外部覆盖。
+        active.handlers[NOTE_TASK_TYPE] = _note_handler
+        task_id = active.submit(task_type=NOTE_TASK_TYPE, payload=task_payload)
+        return {"task": _task_public(_load_task(active, task_id))}
+
     @app.post("/api/note/generate/stream")
     def generate_note_stream(payload: dict, request: Request) -> StreamingResponse:
         url = (payload.get("url") or "").strip()
@@ -340,8 +474,6 @@ def create_app(
             raise HTTPException(status_code=400, detail="URL 不能为空")
 
         async def event_source():
-            from zhiji.pipeline import NotePipeline
-
             events: queue.Queue = queue.Queue()
             cancelled = threading.Event()
             loop = asyncio.get_running_loop()
@@ -354,46 +486,16 @@ def create_app(
 
             def work() -> None:
                 try:
-                    pipeline = NotePipeline(config)
-                    receipt = pipeline.run(
-                        url,
-                        model_name=model_name,
-                        stream_callback=on_delta,
-                        progress_callback=on_progress,
-                        cancel_callback=cancelled.is_set,
+                    events.put(
+                        _generate_note_result(
+                            url=url,
+                            model_name=model_name,
+                            conversation_id=conversation_id,
+                            on_delta=on_delta,
+                            on_progress=on_progress,
+                            cancel_callback=cancelled.is_set,
+                        )
                     )
-                    markdown = receipt.note_path.read_text(encoding="utf-8")
-                    note_body = _strip_frontmatter(markdown)
-                    if conversation_id:
-                        _get_or_404(store, conversation_id)
-                        conversation = store.attach_note(
-                            conversation_id,
-                            platform=receipt.platform,
-                            source_url=url,
-                            note_content=note_body,
-                            note_path=str(receipt.note_path),
-                            title=receipt.title,
-                        )
-                    else:
-                        conversation = store.create(title=(receipt.title or DEFAULT_TITLE)[:60])
-                        conversation = store.attach_note(
-                            conversation.id,
-                            platform=receipt.platform,
-                            source_url=url,
-                            note_content=note_body,
-                            note_path=str(receipt.note_path),
-                        )
-                    events.put({
-                        "done": True,
-                        "note": {
-                            "title": receipt.title,
-                            "path": str(receipt.note_path),
-                            "markdown": note_body,
-                            "transcript_path": str(receipt.transcript_path) if receipt.transcript_path else None,
-                        },
-                        "conversation": _conv_public(conversation),
-                        "warnings": receipt.warnings,
-                    })
                 except GenerationCancelledError:
                     # 客户端已断连，生成的中间态无需回传
                     pass
@@ -722,18 +824,36 @@ def create_app(
         _load_task(active, task_id)
 
         async def event_source():
+            channel = active.bus.subscribe(task_id)
+            loop = asyncio.get_running_loop()
             last: dict | None = None
-            while True:
-                if await request.is_disconnected():
-                    break
-                row = _load_task(active, task_id)
-                snapshot = _task_public(row)
-                if snapshot != last:
-                    yield _sse({"task": snapshot})
-                    last = snapshot
-                if TaskStatus(row.status).is_terminal():
-                    break
-                await asyncio.sleep(0.3)
+            terminal = False
+            try:
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    row = _load_task(active, task_id)
+                    snapshot = _task_public(row)
+                    if snapshot != last:
+                        yield _sse({"task": snapshot})
+                        last = snapshot
+
+                    while True:
+                        try:
+                            item = channel.get_nowait()
+                        except queue.Empty:
+                            break
+                        yield _sse(item)
+
+                    if TaskStatus(row.status).is_terminal():
+                        terminal = True
+                        break
+                    item = await loop.run_in_executor(None, _queue_get, channel, 0.3)
+                    if item is _QUEUE_EMPTY:
+                        continue
+                    yield _sse(item)
+            finally:
+                active.bus.unsubscribe(task_id, channel, clear_history=terminal)
 
         return StreamingResponse(
             event_source(),

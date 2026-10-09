@@ -8,7 +8,10 @@ const state = {
   activeMessages: [],
   note: null,
   genSteps: [],
+  rawText: '',
   generating: false,
+  activeTaskId: null,
+  activeTaskDone: false,
   model: null,
   models: [],
   conversations: [],
@@ -18,6 +21,7 @@ const state = {
   editingModelName: null,
 };
 const PLATFORM_BADGES = { douyin: '抖音', bilibili: 'B站', zhihu: '知乎', xiaohongshu: '小红书' };
+const ACTIVE_TASK_KEY = 'zhiji.activeTaskId';
 
 async function init() {
   bindUI();
@@ -25,6 +29,7 @@ async function init() {
   await loadConversations();
   checkHealth();
   showHome();
+  restoreActiveTask().catch(() => {});
 }
 
 async function checkHealth() {
@@ -71,16 +76,12 @@ async function api(path, options = {}) {
   return res.json();
 }
 
-async function streamSSE(path, body, onEvent) {
-  const res = await fetch(path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+async function readSSE(path, options, onEvent) {
+  const res = await fetch(path, options);
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     const detail = data.detail || data.error || {};
-    throw new Error(detail.message || '请求失败');
+    throw new Error(detail.message || detail.title || '请求失败');
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -98,6 +99,18 @@ async function streamSSE(path, body, onEvent) {
       }
     }
   }
+}
+
+async function streamSSE(path, body, onEvent) {
+  return readSSE(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }, onEvent);
+}
+
+async function streamGetSSE(path, onEvent) {
+  return readSSE(path, { method: 'GET' }, onEvent);
 }
 
 function toast(msg) {
@@ -232,33 +245,19 @@ const STAGE_LABELS = { parse: '解析链接', fetch: '抓取内容', transcribe:
 async function startGeneration() {
   const url = $('url-input').value.trim();
   if (!url) { toast('请先粘贴链接'); return; }
-  state.view = 'conv';
-  state.generating = true;
-  state.genSteps = [];
-  state.note = null;
-  state.activeMessages = [];
-  $('composer-wrap').classList.add('hidden');
-  $('conv-title').textContent = '正在生成笔记';
-  $('conv-meta').textContent = url;
-  renderGenPanel();
-
-  let rawText = '';
+  prepareGenerationView(url);
   try {
-    await streamSSE('/api/note/generate/stream', { url, model: state.model }, (ev) => {
-      if (ev.stage) {
-        upsertStep(ev.stage, ev.message, ev.status);
-      } else if (ev.delta) {
-        rawText += ev.delta;
-        const pre = $('gen-raw-text');
-        if (pre) { pre.textContent = rawText; pre.scrollTop = pre.scrollHeight; }
-      } else if (ev.done) {
-        onGenerationDone(ev);
-      } else if (ev.error) {
-        onGenerationError(ev.error);
-      }
+    const created = await api('/api/note/generate', {
+      method: 'POST',
+      body: JSON.stringify({ url, model: state.model }),
     });
+    const task = created.task;
+    state.activeTaskId = task.id;
+    state.activeTaskDone = false;
+    localStorage.setItem(ACTIVE_TASK_KEY, task.id);
+    await subscribeTaskEvents(task.id);
   } catch (err) {
-    onGenerationError({ message: err.message });
+    onGenerationError(normalizeTaskError(err));
   } finally {
     state.generating = false;
     if (state.conversationId) {
@@ -266,6 +265,84 @@ async function startGeneration() {
       $('composer-hint').textContent = '';
     }
   }
+}
+
+function prepareGenerationView(url) {
+  state.view = 'conv';
+  state.generating = true;
+  state.activeTaskDone = false;
+  state.genSteps = [];
+  state.rawText = '';
+  state.note = null;
+  state.activeMessages = [];
+  $('composer-wrap').classList.add('hidden');
+  $('conv-title').textContent = '正在生成笔记';
+  $('conv-meta').textContent = url || '';
+  renderGenPanel();
+}
+
+async function restoreActiveTask() {
+  const taskId = localStorage.getItem(ACTIVE_TASK_KEY);
+  if (!taskId) return;
+  try {
+    const data = await api('/api/tasks/' + encodeURIComponent(taskId));
+    const task = data.task;
+    prepareGenerationView(task.payload && task.payload.url);
+    state.activeTaskId = taskId;
+    state.activeTaskDone = false;
+    consumeTaskSnapshot(task);
+    if (!isTerminalTask(task.status)) await subscribeTaskEvents(taskId);
+  } catch (err) {
+    localStorage.removeItem(ACTIVE_TASK_KEY);
+  }
+}
+
+async function subscribeTaskEvents(taskId) {
+  const data = await api('/api/tasks/' + encodeURIComponent(taskId));
+  consumeTaskSnapshot(data.task);
+  if (isTerminalTask(data.task.status)) return;
+  await streamGetSSE('/api/tasks/' + encodeURIComponent(taskId) + '/events', (ev) => {
+    if (ev.task) {
+      consumeTaskSnapshot(ev.task);
+      return;
+    }
+    if (state.activeTaskDone || state.activeTaskId !== taskId) return;
+    if (ev.stage) {
+      upsertStep(ev.stage, ev.message, ev.status);
+    } else if (ev.delta) {
+      state.rawText += ev.delta;
+      const pre = $('gen-raw-text');
+      if (pre) { pre.textContent = state.rawText; pre.scrollTop = pre.scrollHeight; }
+    }
+  });
+}
+
+function isTerminalTask(status) {
+  return status === 'succeeded' || status === 'failed' || status === 'cancelled';
+}
+
+function consumeTaskSnapshot(task) {
+  if (!task || state.activeTaskId !== task.id) return;
+  if (task.status === 'succeeded') {
+    if (state.activeTaskDone) return;
+    if (task.result && task.result.done) {
+      onGenerationDone(task.result);
+    } else {
+      onGenerationError({ message: '任务已完成，但没有返回笔记结果' });
+    }
+  } else if (task.status === 'failed') {
+    if (!state.activeTaskDone) onGenerationError(normalizeTaskError(task.error));
+  } else if (task.status === 'cancelled') {
+    if (!state.activeTaskDone) {
+      onGenerationError({ message: '任务已取消', hint: '可以返回首页重新提交' });
+    }
+  }
+}
+
+function normalizeTaskError(error) {
+  if (!error) return { message: '生成失败' };
+  if (typeof error === 'string') return { message: error };
+  return error;
 }
 
 function upsertStep(stage, message, status) {
@@ -291,6 +368,8 @@ function renderGenPanel(error) {
     '</div>' +
     '<div id="note-slot"></div>' +
     '<div id="msg-slot"></div>';
+  const pre = $('gen-raw-text');
+  if (pre && state.rawText) pre.textContent = state.rawText;
   renderGenSteps();
   if (error) showGenError(error);
   scrollToBottom();
@@ -308,6 +387,7 @@ function renderGenSteps() {
 }
 
 function showGenError(error) {
+  error = normalizeTaskError(error);
   const box = $('gen-error');
   if (box) {
     const hint = error.hint ? '\n提示：' + error.hint : '';
@@ -321,6 +401,8 @@ function showGenError(error) {
 }
 
 function onGenerationError(error) {
+  state.activeTaskDone = true;
+  localStorage.removeItem(ACTIVE_TASK_KEY);
   showGenError(error);
   state.generating = false;
   $('conv-title').textContent = '生成失败';
@@ -337,13 +419,15 @@ function onGenerationError(error) {
 
 function onGenerationDone(ev) {
   state.generating = false;
+  state.activeTaskDone = true;
+  localStorage.removeItem(ACTIVE_TASK_KEY);
   const conv = ev.conversation;
   state.conversationId = conv.id;
   state.activeConv = conv;
   state.activeMessages = [];
   state.note = ev.note;
-  state.note.platform = conv.platform;
-  state.note.source_url = conv.source_url;
+  state.note.platform = ev.note.platform || conv.platform;
+  state.note.source_url = ev.note.source_url || conv.source_url;
   const head = document.querySelector('.gen-panel-head');
   if (head) head.innerHTML = '<span style="color:var(--accent)">✓</span><span>笔记已生成</span>';
   renderNoteCard(ev.warnings || []);
