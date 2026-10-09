@@ -282,29 +282,37 @@ def check_env() -> None:
 def web(
     port: int = 8000,
     host: str = "127.0.0.1",
-    token: str | None = typer.Option(None, help="非本机绑定时必须提供的访问令牌"),
+    token: str | None = typer.Option(None, help="非本机绑定时可提供的共享访问令牌"),
+    require_auth: bool = typer.Option(
+        False, "--require-auth", help="开启账号鉴权：受保护接口需登录后访问"
+    ),
 ) -> None:
     """启动本地 Web 配置页。
 
     绑定到非本机地址（如 0.0.0.0）会暴露 API Key / Cookie 管理接口，
-    因此必须同时提供 --token，访问时需带上 ?token=。
+    因此必须提供 --token（共享令牌）或 --require-auth（账号登录）之一。
     """
     import uvicorn
 
     from zhiji.web.app import create_app
 
     is_local = host in {"127.0.0.1", "localhost", "::1"}
-    if not is_local and not token:
+    if not is_local and not token and not require_auth:
         console.print(
-            "[red]拒绝启动：绑定非本机地址必须提供 --token[/red]\n"
-            "[yellow]示例：zhiji web --host 0.0.0.0 --token <你的令牌>[/yellow]"
+            "[red]拒绝启动：绑定非本机地址必须提供 --token 或 --require-auth[/red]\n"
+            "[yellow]示例：zhiji web --host 0.0.0.0 --token <你的令牌>[/yellow]\n"
+            "[yellow]或：  zhiji web --host 0.0.0.0 --require-auth（先注册账号）[/yellow]"
         )
         raise typer.Exit(1)
     access = f"http://{host}:{port}"
     if token:
         access += f"/?token={token}"
     console.print(f"打开 {access}")
-    uvicorn.run(create_app(_manager(), token=token), host=host, port=port)
+    uvicorn.run(
+        create_app(_manager(), token=token, require_auth=require_auth),
+        host=host,
+        port=port,
+    )
 
 
 def _importable(module: str) -> str:

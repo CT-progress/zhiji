@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import queue
 import re
 import threading
@@ -51,6 +52,25 @@ CONFIG_HTML = STATIC_DIR / "config.html"
 # 异步生成器轮询队列超时的哨兵值（区别于队列里的 None 结束标记）
 _QUEUE_EMPTY = object()
 NOTE_TASK_TYPE = "note.generate"
+
+#: 账号鉴权开关；默认关闭以保持本机零配置可直接使用。
+REQUIRE_AUTH_ENV = "ZHIJI_REQUIRE_AUTH"
+
+#: 账号鉴权模式下无需登录即可访问的接口（注册 / 登录 / 登出 / 健康检查）。
+PUBLIC_API_PATHS = frozenset(
+    {
+        "/api/health",
+        "/api/auth/register",
+        "/api/auth/login",
+        "/api/auth/logout",
+    }
+)
+
+
+def _env_flag(name: str) -> bool:
+    """读取布尔型环境变量：1 / true / yes / on 视为开启。"""
+
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _queue_get(q: queue.Queue, timeout: float):
@@ -122,6 +142,21 @@ def _session_token(request: Request) -> str | None:
     if header.lower().startswith("bearer "):
         return header[len("bearer ") :].strip() or None
     return None
+
+
+def _access_token(request: Request) -> str | None:
+    """从 Bearer 头、``?token=`` 或 ``zhiji_token`` Cookie 取旧版访问令牌。"""
+
+    header = request.headers.get("authorization", "").strip()
+    if header.lower().startswith("bearer "):
+        bearer = header[len("bearer ") :].strip()
+    else:
+        bearer = ""
+    return (
+        bearer
+        or request.query_params.get("token")
+        or request.cookies.get("zhiji_token")
+    )
 
 
 def _conv_summary(conversation: Conversation) -> dict:
@@ -218,6 +253,7 @@ def create_app(
     token: str | None = None,
     worker: TaskWorker | None = None,
     secret_key: str | None = None,
+    require_auth: bool | None = None,
 ) -> FastAPI:
     config = config_manager or ConfigManager()
     store = ChatStore(data_dir)
@@ -225,6 +261,8 @@ def create_app(
     auth_database = store.database or resolve_database(data_dir)
     auth = AuthService(auth_database, secret=secret_key)
     task_worker = worker
+    # 账号鉴权开关：显式参数优先，其次读取环境变量，默认关闭。
+    require_auth = _env_flag(REQUIRE_AUTH_ENV) if require_auth is None else bool(require_auth)
 
     def _current_user(request: Request) -> UserRow | None:
         """解析当前登录用户；没有会话、验签失败或用户被禁用都返回 None。"""
@@ -366,26 +404,39 @@ def create_app(
     )
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-    if token:
+    # 只有启用「旧版访问令牌」或「账号鉴权」时才挂中间件，本机零配置保持原有开放行为。
+    if token or require_auth:
 
         @app.middleware("http")
         async def auth_middleware(request: Request, call_next):
-            """非本机绑定时校验访问令牌，避免 API Key / Cookie 接口暴露在局域网。"""
+            """统一鉴权：旧版访问令牌与账号会话二选一放行受保护接口。
 
-            provided = (
-                request.headers.get("authorization", "").removeprefix("Bearer ").strip()
-                or request.query_params.get("token")
-                or request.cookies.get("zhiji_token")
-            )
-            if request.url.path.startswith("/api/") and provided != token:
-                return JSONResponse(
-                    status_code=401,
-                    content=error_response(
-                        ZhijiError("缺少或无效的访问令牌", hint="请使用带 ?token= 的地址访问")
-                    ),
-                )
+            - 配置了 ``token`` 时沿用旧行为：保护全部 ``/api/``（含健康检查）；
+            - 开启 ``require_auth`` 时：注册 / 登录 / 登出 / 健康检查公开，
+              其余 ``/api/`` 接口要求有效账号会话；
+            - 两者同时开启时任一凭证有效即放行，方便本地过渡。
+            """
+
+            path = request.url.path
+            if path.startswith("/api/"):
+                session_ok = bool(require_auth) and _current_user(request) is not None
+                if token:
+                    token_ok = _access_token(request) == token
+                    allowed = token_ok or session_ok
+                else:
+                    allowed = path in PUBLIC_API_PATHS or session_ok
+                if not allowed:
+                    return JSONResponse(
+                        status_code=401,
+                        content=error_response(
+                            ZhijiError(
+                                "缺少或无效的登录凭证",
+                                hint="请先登录，或使用配置的访问令牌访问",
+                            )
+                        ),
+                    )
             response = await call_next(request)
-            if request.url.path == "/" and request.query_params.get("token") == token:
+            if token and path == "/" and request.query_params.get("token") == token:
                 response.set_cookie("zhiji_token", token, httponly=True, samesite="strict")
             return response
 

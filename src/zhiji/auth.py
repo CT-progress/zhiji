@@ -40,6 +40,7 @@ PASSWORD_MAX_BYTES = 72
 SESSION_COOKIE_NAME = "zhiji_session"
 SECRET_KEY_ENV = "ZHIJI_SECRET_KEY"
 BCRYPT_ROUNDS_ENV = "ZHIJI_BCRYPT_ROUNDS"
+SESSION_TTL_ENV = "ZHIJI_SESSION_TTL"
 DEFAULT_BCRYPT_ROUNDS = 12
 
 DEFAULT_SESSION_TTL_SECONDS = 7 * 24 * 3600
@@ -86,6 +87,15 @@ def _default_rounds() -> int:
     if raw.isdigit():
         return max(4, min(16, int(raw)))
     return DEFAULT_BCRYPT_ROUNDS
+
+
+def _default_session_ttl() -> int:
+    """会话默认有效期：显式配置优先，否则读取 ``ZHIJI_SESSION_TTL``。"""
+
+    raw = os.getenv(SESSION_TTL_ENV, "").strip()
+    if raw.isdigit() and int(raw) > 0:
+        return int(raw)
+    return DEFAULT_SESSION_TTL_SECONDS
 
 
 def hash_password(password: str, *, rounds: int | None = None) -> str:
@@ -215,15 +225,16 @@ class AuthService:
         database: Database,
         *,
         secret: str | None = None,
-        session_ttl: int = DEFAULT_SESSION_TTL_SECONDS,
+        session_ttl: int | None = None,
         bcrypt_rounds: int | None = None,
         secret_path: Path | None = None,
     ) -> None:
         self._database = database
         self._lock = lock_for_key(f"users:{database.url}")
         self._rounds = bcrypt_rounds
+        ttl = session_ttl if session_ttl is not None else _default_session_ttl()
         self.sessions = SessionManager(
-            secret=secret, ttl_seconds=session_ttl, secret_path=secret_path
+            secret=secret, ttl_seconds=ttl, secret_path=secret_path
         )
 
     @property
