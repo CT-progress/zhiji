@@ -43,6 +43,14 @@ class ConfigError(ZhijiError):
     code = "CONFIG_ERROR"
 
 
+class StorageError(ZhijiError):
+    code = "STORAGE_ERROR"
+
+
+class TaskNotFoundError(ZhijiError):
+    code = "TASK_NOT_FOUND"
+
+
 class GenerationCancelledError(ZhijiError):
     """调用方主动取消（如 SSE 断连）导致的生成中断，不算失败。"""
 

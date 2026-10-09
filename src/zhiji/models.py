@@ -26,6 +26,19 @@ class ContentType(str, Enum):
     QUESTION = "question"
 
 
+class TaskStatus(str, Enum):
+    """任务状态机取值。"""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+    def is_terminal(self) -> bool:
+        return self in {TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELLED}
+
+
 class ContentRef(BaseModel):
     platform: Platform
     content_type: ContentType

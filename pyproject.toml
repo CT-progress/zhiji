@@ -21,6 +21,8 @@ dependencies = [
   "yt-dlp>=2024.8.6",
   "curl-cffi>=0.7",
   "html2text>=2024.2.26",
+  "sqlalchemy>=2.0",
+  "alembic>=1.13",
 ]
 
 [project.optional-dependencies]
