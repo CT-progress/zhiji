@@ -10,13 +10,33 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from zhiji.errors import TaskNotFoundError
-from zhiji.models import TaskStatus
+from zhiji.errors import TaskNotFoundError, TaskTransitionError
+from zhiji.models import TASK_TRANSITIONS, TaskStatus
 from zhiji.storage.tables import TaskRow
 
 TERMINAL_STATUSES = frozenset(
     {TaskStatus.SUCCEEDED.value, TaskStatus.FAILED.value, TaskStatus.CANCELLED.value}
 )
+
+
+def _coerce_status(status: TaskStatus | str) -> TaskStatus:
+    """把字符串状态转成枚举；未知状态抛 ValueError（保持原契约）。"""
+
+    try:
+        return TaskStatus(status)
+    except ValueError as exc:
+        raise ValueError(f"未知的任务状态: {status!r}") from exc
+
+
+def _legal_targets(status: TaskStatus) -> str:
+    targets = sorted(item.value for item in TASK_TRANSITIONS[status])
+    return ", ".join(targets) if targets else "无（终态不可再流转）"
+
+
+def _check_progress(progress: int) -> int:
+    if not 0 <= progress <= 100:
+        raise TaskTransitionError(f"进度必须在 0-100 之间: {progress}")
+    return progress
 
 
 class TaskRepository:
@@ -84,20 +104,54 @@ class TaskRepository:
         result: dict[str, Any] | None = None,
         progress: int | None = None,
     ) -> TaskRow:
+        """按状态机流转任务；非法流转或失败缺原因都会被拒绝。
+
+        合法流转见 ``zhiji.models.TASK_TRANSITIONS``：
+        PENDING -> RUNNING / CANCELLED，RUNNING -> SUCCEEDED / FAILED / CANCELLED，
+        终态不可再流转。
+        """
+
         row = self.get(task_id)
-        value = TaskStatus(status).value
+        current = TaskStatus(row.status)
+        target = _coerce_status(status)
+        if not current.can_transition_to(target):
+            raise TaskTransitionError(
+                f"非法的任务状态流转: {current.value} -> {target.value}",
+                hint=f"{current.value} 的合法目标: {_legal_targets(current)}",
+            )
+        if target is TaskStatus.FAILED and not (error and error.strip()):
+            raise TaskTransitionError(
+                "失败任务必须记录失败原因",
+                hint="调用 update_status(..., status=FAILED, error='...')",
+            )
+        if progress is not None:
+            row.progress = _check_progress(progress)
+
         now = datetime.now(UTC)
-        row.status = value
+        row.status = target.value
         row.updated_at = now
+        if target is TaskStatus.RUNNING and row.started_at is None:
+            row.started_at = now
         if error is not None:
             row.error = error
         if result is not None:
             row.result_json = json.dumps(result, ensure_ascii=False)
-        if progress is not None:
-            row.progress = progress
-        if value == TaskStatus.RUNNING.value and row.started_at is None:
-            row.started_at = now
-        if value in TERMINAL_STATUSES:
+        if target.value in TERMINAL_STATUSES:
             row.finished_at = now
+        self.session.flush()
+        return row
+
+    def update_progress(self, task_id: str, progress: int) -> TaskRow:
+        """只更新运行中任务的进度，不改变状态。"""
+
+        row = self.get(task_id)
+        current = TaskStatus(row.status)
+        if current is not TaskStatus.RUNNING:
+            raise TaskTransitionError(
+                f"只有运行中的任务能更新进度，当前为 {current.value}",
+                hint="先流转到 RUNNING",
+            )
+        row.progress = _check_progress(progress)
+        row.updated_at = datetime.now(UTC)
         self.session.flush()
         return row

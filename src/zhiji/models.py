@@ -38,6 +38,23 @@ class TaskStatus(str, Enum):
     def is_terminal(self) -> bool:
         return self in {TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELLED}
 
+    def can_transition_to(self, target: TaskStatus) -> bool:
+        """判断从当前状态能否流转到目标状态（终态没有出边）。"""
+
+        return target in TASK_TRANSITIONS[self]
+
+
+#: 任务状态机的合法流转；终态（succeeded / failed / cancelled）没有出边。
+TASK_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
+    TaskStatus.PENDING: frozenset({TaskStatus.RUNNING, TaskStatus.CANCELLED}),
+    TaskStatus.RUNNING: frozenset(
+        {TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELLED}
+    ),
+    TaskStatus.SUCCEEDED: frozenset(),
+    TaskStatus.FAILED: frozenset(),
+    TaskStatus.CANCELLED: frozenset(),
+}
+
 
 class ContentRef(BaseModel):
     platform: Platform

@@ -51,6 +51,12 @@ class TaskNotFoundError(ZhijiError):
     code = "TASK_NOT_FOUND"
 
 
+class TaskTransitionError(ZhijiError):
+    """任务状态机非法流转（含缺少失败原因等约束）。"""
+
+    code = "TASK_TRANSITION_INVALID"
+
+
 class GenerationCancelledError(ZhijiError):
     """调用方主动取消（如 SSE 断连）导致的生成中断，不算失败。"""
 
