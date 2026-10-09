@@ -7,6 +7,8 @@ import json
 import queue
 import re
 import threading
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -24,9 +26,20 @@ from zhiji.chat import (
     extract_supported_links,
 )
 from zhiji.config import ConfigManager, mask_api_key
-from zhiji.errors import ConfigError, GenerationCancelledError, LLMError, ZhijiError, error_response
+from zhiji.errors import (
+    ConfigError,
+    GenerationCancelledError,
+    LLMError,
+    TaskNotFoundError,
+    TaskTransitionError,
+    ZhijiError,
+    error_response,
+)
 from zhiji.llm.client import LLMClient
-from zhiji.models import LLMModelConfig
+from zhiji.models import LLMModelConfig, TaskStatus
+from zhiji.storage import TaskRepository
+from zhiji.storage.tables import TaskRow
+from zhiji.tasks import TaskWorker, get_worker
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 CONFIG_HTML = STATIC_DIR / "config.html"
@@ -60,6 +73,13 @@ class ChatRequest(BaseModel):
     model_name: str | None = None
 
 
+class SubmitTaskRequest(BaseModel):
+    type: str = Field(min_length=1)
+    platform: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    priority: int = 0
+
+
 def _conv_summary(conversation: Conversation) -> dict:
     return {
         "id": conversation.id,
@@ -76,6 +96,42 @@ def _conv_public(conversation: Conversation) -> dict:
     data = conversation.model_dump(mode="json")
     data["message_count"] = len(conversation.messages)
     return data
+
+
+def _task_public(row: TaskRow) -> dict:
+    def _iso(value: Any) -> str | None:
+        return value.isoformat() if value is not None else None
+
+    return {
+        "id": row.id,
+        "type": row.type,
+        "platform": row.platform,
+        "status": row.status,
+        "priority": row.priority,
+        "progress": row.progress,
+        "payload": json.loads(row.payload_json or "{}"),
+        "result": json.loads(row.result_json) if row.result_json else None,
+        "error": row.error,
+        "created_at": _iso(row.created_at),
+        "updated_at": _iso(row.updated_at),
+        "started_at": _iso(row.started_at),
+        "finished_at": _iso(row.finished_at),
+    }
+
+
+def _load_task(worker: TaskWorker, task_id: str) -> TaskRow:
+    with worker.database.session_scope() as session:
+        row = TaskRepository(session).find(task_id)
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_response(TaskNotFoundError(f"任务不存在: {task_id}")),
+        )
+    return row
+
+
+def _http_error(status_code: int, exc: ZhijiError) -> HTTPException:
+    return HTTPException(status_code=status_code, detail=error_response(exc))
 
 
 def _get_or_404(store: ChatStore, conversation_id: str) -> Conversation:
@@ -116,10 +172,30 @@ def create_app(
     config_manager: ConfigManager | None = None,
     data_dir: str | Path | None = None,
     token: str | None = None,
+    worker: TaskWorker | None = None,
 ) -> FastAPI:
     config = config_manager or ConfigManager()
     store = ChatStore(data_dir)
-    app = FastAPI(title="知记本地配置", version="0.1.0", docs_url="/docs")
+    task_worker = worker
+
+    def _resolve_worker() -> TaskWorker:
+        nonlocal task_worker
+        if task_worker is None:
+            task_worker = get_worker()
+        return task_worker
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        active = _resolve_worker()
+        active.start()
+        try:
+            yield
+        finally:
+            active.stop()
+
+    app = FastAPI(
+        title="知记本地配置", version="0.1.0", docs_url="/docs", lifespan=lifespan
+    )
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     if token:
@@ -580,6 +656,84 @@ def create_app(
                     yield _sse(item)
             finally:
                 cancelled.set()
+
+        return StreamingResponse(
+            event_source(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    # ---- 任务 API（阶段 2.3）-------------------------------------
+
+    @app.post("/api/tasks")
+    def submit_task(payload: SubmitTaskRequest) -> dict:
+        active = _resolve_worker()
+        task_id = active.submit(
+            task_type=payload.type,
+            platform=payload.platform,
+            payload=payload.payload,
+            priority=payload.priority,
+        )
+        return {"task": _task_public(_load_task(active, task_id))}
+
+    @app.get("/api/tasks")
+    def list_tasks(
+        status: str | None = None,
+        platform: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict:
+        active = _resolve_worker()
+        status_filter: TaskStatus | None = None
+        if status:
+            try:
+                status_filter = TaskStatus(status)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400, detail=f"未知的任务状态: {status}"
+                ) from exc
+        with active.database.session_scope() as session:
+            rows = TaskRepository(session).list(
+                status=status_filter,
+                platform=platform,
+                limit=max(1, min(limit, 200)),
+                offset=max(0, offset),
+            )
+        return {"tasks": [_task_public(row) for row in rows]}
+
+    @app.get("/api/tasks/{task_id}")
+    def get_task(task_id: str) -> dict:
+        return {"task": _task_public(_load_task(_resolve_worker(), task_id))}
+
+    @app.post("/api/tasks/{task_id}/cancel")
+    def cancel_task(task_id: str) -> dict:
+        active = _resolve_worker()
+        try:
+            row = active.cancel(task_id)
+        except TaskNotFoundError as exc:
+            raise _http_error(404, exc) from exc
+        except TaskTransitionError as exc:
+            raise _http_error(409, exc) from exc
+        return {"task": _task_public(row)}
+
+    @app.get("/api/tasks/{task_id}/events")
+    def task_events(task_id: str, request: Request) -> StreamingResponse:
+        active = _resolve_worker()
+        _load_task(active, task_id)
+
+        async def event_source():
+            last: dict | None = None
+            while True:
+                if await request.is_disconnected():
+                    break
+                row = _load_task(active, task_id)
+                snapshot = _task_public(row)
+                if snapshot != last:
+                    yield _sse({"task": snapshot})
+                    last = snapshot
+                if TaskStatus(row.status).is_terminal():
+                    break
+                await asyncio.sleep(0.3)
 
         return StreamingResponse(
             event_source(),
