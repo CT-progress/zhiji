@@ -23,6 +23,7 @@ dependencies = [
   "html2text>=2024.2.26",
   "sqlalchemy>=2.0",
   "alembic>=1.13",
+  "bcrypt>=4.1",
 ]
 
 [project.optional-dependencies]

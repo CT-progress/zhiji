@@ -12,11 +12,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from zhiji.auth import SESSION_COOKIE_NAME, AuthService
 from zhiji.chat import (
     DEFAULT_TITLE,
     ChatNotFoundError,
@@ -24,10 +25,13 @@ from zhiji.chat import (
     Conversation,
     build_chat_messages,
     extract_supported_links,
+    resolve_database,
 )
 from zhiji.config import ConfigManager, mask_api_key
 from zhiji.errors import (
+    AuthError,
     ConfigError,
+    DuplicateUserError,
     GenerationCancelledError,
     LLMError,
     TaskNotFoundError,
@@ -38,7 +42,7 @@ from zhiji.errors import (
 from zhiji.llm.client import LLMClient
 from zhiji.models import LLMModelConfig, TaskStatus
 from zhiji.storage import TaskRepository
-from zhiji.storage.tables import TaskRow
+from zhiji.storage.tables import TaskRow, UserRow
 from zhiji.tasks import TaskContext, TaskWorker, get_worker
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -85,6 +89,39 @@ class GenerateNoteRequest(BaseModel):
     url: str = Field(min_length=1)
     model: str | None = None
     conversation_id: str | None = None
+
+
+class RegisterRequest(BaseModel):
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+    display_name: str | None = None
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+def _user_public(user: UserRow) -> dict:
+    return {
+        "id": user.id,
+        "username": user.username,
+        "display_name": user.display_name,
+        "is_active": user.is_active,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+    }
+
+
+def _session_token(request: Request) -> str | None:
+    """从 Cookie 或 ``Authorization: Bearer`` 取会话令牌。"""
+
+    cookie = request.cookies.get(SESSION_COOKIE_NAME)
+    if cookie:
+        return cookie
+    header = request.headers.get("authorization", "")
+    if header.lower().startswith("bearer "):
+        return header[len("bearer ") :].strip() or None
+    return None
 
 
 def _conv_summary(conversation: Conversation) -> dict:
@@ -180,10 +217,25 @@ def create_app(
     data_dir: str | Path | None = None,
     token: str | None = None,
     worker: TaskWorker | None = None,
+    secret_key: str | None = None,
 ) -> FastAPI:
     config = config_manager or ConfigManager()
     store = ChatStore(data_dir)
+    # 认证始终落在数据库：会话后端走同一库；JSON 回退时单独解析一个库。
+    auth_database = store.database or resolve_database(data_dir)
+    auth = AuthService(auth_database, secret=secret_key)
     task_worker = worker
+
+    def _current_user(request: Request) -> UserRow | None:
+        """解析当前登录用户；没有会话、验签失败或用户被禁用都返回 None。"""
+
+        token_value = _session_token(request)
+        if not token_value:
+            return None
+        user_id = auth.read_session(token_value)
+        if user_id is None:
+            return None
+        return auth.get_user(user_id)
 
     def _generate_note_result(
         *,
@@ -348,6 +400,44 @@ def create_app(
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(CONFIG_HTML)
+
+    @app.post("/api/auth/register")
+    def auth_register(payload: RegisterRequest) -> dict:
+        try:
+            user = auth.register(
+                payload.username, payload.password, display_name=payload.display_name
+            )
+        except (AuthError, DuplicateUserError) as exc:
+            raise _http_error(400, exc) from exc
+        return {"user": _user_public(user)}
+
+    @app.post("/api/auth/login")
+    def auth_login(payload: LoginRequest, response: Response) -> dict:
+        try:
+            user = auth.authenticate(payload.username, payload.password)
+        except AuthError as exc:
+            raise _http_error(401, exc) from exc
+        token_value = auth.create_session(user.id)
+        response.set_cookie(
+            SESSION_COOKIE_NAME,
+            token_value,
+            max_age=auth.session_ttl,
+            httponly=True,
+            samesite="strict",
+        )
+        return {"user": _user_public(user), "token": token_value}
+
+    @app.post("/api/auth/logout")
+    def auth_logout(response: Response) -> dict:
+        response.delete_cookie(SESSION_COOKIE_NAME)
+        return {"ok": True}
+
+    @app.get("/api/auth/me")
+    def auth_me(request: Request) -> dict:
+        user = _current_user(request)
+        if user is None:
+            raise _http_error(401, AuthError("未登录或会话已过期", hint="请先登录"))
+        return {"user": _user_public(user)}
 
     @app.get("/api/models")
     def list_models() -> dict:

@@ -21,7 +21,9 @@ from zhiji.storage.tables import (
     ConversationRow,
     ModelConfigRow,
     TaskRow,
+    UserRow,
 )
+from zhiji.storage.user_repository import UserRepository
 
 __all__ = [
     "DEFAULT_DB_RELATIVE",
@@ -36,6 +38,8 @@ __all__ = [
     "ModelConfigRow",
     "TaskRepository",
     "TaskRow",
+    "UserRepository",
+    "UserRow",
     "create_database_engine",
     "default_database_url",
     "get_database",

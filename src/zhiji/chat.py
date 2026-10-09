@@ -265,7 +265,7 @@ class DbChatStore:
         data_dir: str | Path | None = None,
     ) -> None:
         self.data_dir = Path(data_dir) if data_dir else DATA_DIR
-        self.database = database or _resolve_database(data_dir)
+        self.database = database or resolve_database(data_dir)
         self.location = self.database.url
         self.database.create_all()
         self._lock = _lock_for_key(f"db:{self.database.url}")
@@ -379,6 +379,12 @@ class ChatStore:
         self.backend_name = store.backend_name
         self.location = store.location
 
+    @property
+    def database(self) -> Database | None:
+        """数据库后端时返回底层 ``Database``；JSON 回退时返回 None。"""
+
+        return getattr(self._store, "database", None)
+
     def list(self) -> list[Conversation]:
         return self._store.list()
 
@@ -419,7 +425,7 @@ class ChatStore:
         return self._store.append_message(conversation_id, role, content)
 
 
-def _resolve_database(data_dir: str | Path | None) -> Database:
+def resolve_database(data_dir: str | Path | None) -> Database:
     """没有显式 data_dir 时复用进程级数据库；否则用该目录下的 zhiji.db。"""
 
     if data_dir is None:

@@ -49,6 +49,28 @@ class TaskRow(Base):
         return f"<TaskRow id={self.id!r} type={self.type!r} status={self.status!r}>"
 
 
+class UserRow(Base):
+    """用户表：密码只存 bcrypt 哈希，任何地方都不保存明文。
+
+    用户名统一小写后入库，保证大小写不敏感的唯一性。
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    display_name: Mapped[str | None] = mapped_column(String(120), default=None)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<UserRow id={self.id!r} username={self.username!r} active={self.is_active!r}>"
+
+
 class ConversationRow(Base):
     """会话主表：字段与 zhiji.chat.Conversation 一一对应。"""
 

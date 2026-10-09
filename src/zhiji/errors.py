@@ -57,6 +57,20 @@ class TaskTransitionError(ZhijiError):
     code = "TASK_TRANSITION_INVALID"
 
 
+class UserNotFoundError(ZhijiError):
+    code = "USER_NOT_FOUND"
+
+
+class DuplicateUserError(ZhijiError):
+    code = "USER_ALREADY_EXISTS"
+
+
+class AuthError(ZhijiError):
+    """注册 / 登录 / 会话校验失败。"""
+
+    code = "AUTH_FAILED"
+
+
 class GenerationCancelledError(ZhijiError):
     """调用方主动取消（如 SSE 断连）导致的生成中断，不算失败。"""
 
