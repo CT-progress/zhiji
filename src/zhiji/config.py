@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from pydantic import ValidationError
 
 from zhiji.errors import ConfigError, OutputWriteError, ZhijiError
 from zhiji.models import AppConfig, AppSettings, LLMModelConfig
+from zhiji.security.crypto import mask_credential
 from zhiji.storage import Database, get_database
 from zhiji.storage.config_repository import ConfigRepository
 
@@ -54,11 +56,9 @@ def read_config_file(path: str | Path) -> AppConfig:
 
 
 def mask_api_key(value: str) -> str:
-    if not value:
-        return ""
-    if len(value) <= 8:
-        return "*" * len(value)
-    return f"{value[:4]}****{value[-4:]}"
+    """Key 的展示掩码；实现见 :func:`zhiji.security.crypto.mask_credential`。"""
+
+    return mask_credential(value)
 
 
 class ConfigManager:
@@ -112,17 +112,35 @@ class ConfigManager:
         return imported
 
     def save(self) -> None:
-        if self._repository is not None:
-            self._repository.save(self._config)
-        self._write_file()
+        if self._repository is None:
+            # 纯文件后端：Key 必须落在 JSON 里，这是该后端选择的存储方式。
+            self._write_file(sanitize=False)
+            return
+        self._repository.save(self._config)
+        # 数据库后端：Key 已加密入库，导出的 JSON 不再保留任何明文。
+        self._write_file(sanitize=True)
 
-    def _write_file(self) -> None:
+    def _write_file(self, *, sanitize: bool) -> None:
+        """把配置导出到 ``self.path``；``sanitize=True`` 时清空所有 Key。"""
+
+        if sanitize:
+            payload = json.dumps(self._export_payload(), ensure_ascii=False, indent=2)
+        else:
+            payload = self._config.model_dump_json(indent=2)
         tmp = self.path.with_suffix(".json.tmp")
         try:
-            tmp.write_text(self._config.model_dump_json(indent=2), encoding="utf-8")
+            tmp.write_text(payload, encoding="utf-8")
             tmp.replace(self.path)
         except OSError as exc:
             raise OutputWriteError(f"配置写入失败: {self.path}") from exc
+
+    def _export_payload(self) -> dict:
+        """导出用副本：模型 Key 一律置空，绝不把明文写进 JSON。"""
+
+        data = self._config.model_dump(mode="json")
+        for model in data.get("models", []):
+            model["api_key"] = ""
+        return data
 
     def get(self) -> AppConfig:
         return self._config

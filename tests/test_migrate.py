@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -10,9 +11,15 @@ import pytest
 from zhiji.chat import JSON_BACKEND, ChatNotFoundError, ChatStore
 from zhiji.config import ConfigManager, read_config_file
 from zhiji.errors import ZhijiError
-from zhiji.migrate import import_config, load_conversations, main, migrate_conversations
+from zhiji.migrate import (
+    import_config,
+    load_conversations,
+    main,
+    migrate_conversations,
+    migrate_llm_keys,
+)
 from zhiji.models import LLMModelConfig
-from zhiji.storage import ConfigRepository, Database
+from zhiji.storage import ConfigRepository, Database, LLMCredentialRow, ModelConfigRow
 
 
 @pytest.fixture()
@@ -174,3 +181,103 @@ def test_main_config_dry_run_reports_plan(
     assert main(["--config", str(path), "--database", url, "--dry-run"]) == 0
     assert "将导入 1 个" in capsys.readouterr().out
     assert ConfigRepository(Database(url)).load() is None
+
+
+def _seed_plaintext_key(database: Database, name: str, key: str) -> None:
+    """直接写一行带明文 Key 的旧模型配置（模拟 1.3 导入后的库）。"""
+
+    database.create_all()
+    with database.session_scope() as session:
+        session.add(ModelConfigRow(name=name, api_key=key))
+
+
+def _rows(database: Database) -> tuple[list[ModelConfigRow], list[LLMCredentialRow]]:
+    with database.session_scope() as session:
+        models = list(session.query(ModelConfigRow))
+        creds = list(session.query(LLMCredentialRow))
+    return models, creds
+
+
+def test_migrate_llm_keys_encrypts_and_clears(tmp_path: Path, database: Database) -> None:
+    secret = "sk-plain-abcdefghijklmnop"
+    _seed_plaintext_key(database, "DeepSeek", secret)
+    config_path = tmp_path / "zhiji.json"
+    config_path.write_text(
+        json.dumps({"models": [{"name": "DeepSeek", "api_key": secret}]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    result = migrate_llm_keys(database, config_path)
+    assert (result.found, result.migrated, result.cleared_rows) == (1, 1, 1)
+    assert result.json_cleared is True
+
+    models, creds = _rows(database)
+    assert models[0].api_key == ""
+    assert creds[0].key_cipher.startswith("v1.")
+    assert secret not in creds[0].key_cipher
+    assert secret not in config_path.read_text(encoding="utf-8")
+
+    cm = ConfigManager(tmp_path / "loaded.json", database=database)
+    assert cm.get_model("DeepSeek").api_key == secret  # type: ignore[union-attr]
+
+
+def test_migrate_llm_keys_is_idempotent(tmp_path: Path, database: Database) -> None:
+    _seed_plaintext_key(database, "DeepSeek", "sk-plain-1")
+    config_path = tmp_path / "zhiji.json"
+    config_path.write_text(json.dumps({"models": []}), encoding="utf-8")
+    migrate_llm_keys(database, config_path)
+
+    again = migrate_llm_keys(database, config_path)
+    assert (again.found, again.migrated, again.already_stored, again.cleared_rows) == (0, 0, 0, 0)
+
+
+def test_migrate_llm_keys_dry_run_writes_nothing(tmp_path: Path, database: Database) -> None:
+    secret = "sk-plain-dryrun-123456"
+    _seed_plaintext_key(database, "DeepSeek", secret)
+    config_path = tmp_path / "zhiji.json"
+    config_path.write_text(
+        json.dumps({"models": [{"name": "DeepSeek", "api_key": secret}]}), encoding="utf-8"
+    )
+
+    result = migrate_llm_keys(database, config_path, dry_run=True)
+    assert (result.found, result.migrated, result.dry_run) == (1, 1, True)
+
+    models, creds = _rows(database)
+    assert models[0].api_key == secret  # 未清空
+    assert creds == []  # 未入库
+    assert secret in config_path.read_text(encoding="utf-8")  # 文件未动
+
+
+def test_main_migrate_keys_cli(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = tmp_path / "zhiji.json"
+    config_path.write_text(
+        json.dumps({"models": [{"name": "DeepSeek", "api_key": "sk-cli-1234567890"}]}),
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "zhiji.db"
+    url = f"sqlite:///{db_path.as_posix()}"
+
+    assert main(["--migrate-keys", "--config", str(config_path), "--database", url]) == 0
+    out = capsys.readouterr().out
+    assert "新加密 1 个" in out
+    assert "sk-cli-1234567890" not in out
+
+
+def test_migrate_llm_keys_leaves_no_plaintext_in_db_file(
+    tmp_path: Path, database: Database
+) -> None:
+    secret = "sk-residue-abcdefghijklmnop"
+    _seed_plaintext_key(database, "DeepSeek", secret)
+    config_path = tmp_path / "zhiji.json"
+    config_path.write_text(json.dumps({"models": []}), encoding="utf-8")
+    migrate_llm_keys(database, config_path)
+
+    db_path = Path(database.url.replace("sqlite:///", ""))
+    blob = db_path.read_bytes()
+    for suffix in ("-wal", "-shm"):
+        extra = db_path.with_name(db_path.name + suffix)
+        if extra.exists():
+            blob += extra.read_bytes()
+    assert secret.encode("utf-8") not in blob

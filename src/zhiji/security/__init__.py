@@ -12,6 +12,7 @@ from zhiji.security.crypto import (
     default_master_key_path,
     generate_master_key,
     key_fingerprint,
+    mask_credential,
     parse_master_key,
     resolve_master_key,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "default_master_key_path",
     "generate_master_key",
     "key_fingerprint",
+    "mask_credential",
     "parse_master_key",
     "resolve_master_key",
 ]

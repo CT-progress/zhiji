@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from zhiji.models import TaskStatus
@@ -149,6 +157,43 @@ class ModelConfigRow(Base):
 
     def __repr__(self) -> str:
         return f"<ModelConfigRow name={self.name!r}>"
+
+
+#: 凭据状态：active = 有可用密文；unset = 未设置或已清空。
+CREDENTIAL_ACTIVE = "active"
+CREDENTIAL_UNSET = "unset"
+
+
+class LLMCredentialRow(Base):
+    """LLM API Key 密文表：明文只在写入瞬间存在，读取时才解密。
+
+    唯一键是 ``(user_id, name)``；SQLite 下 ``NULL`` 不参与唯一约束比较，
+    因此本机作用域（``user_id IS NULL``）的去重由仓储层保证。
+    """
+
+    __tablename__ = "llm_credentials"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_llm_credential_user_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    #: 凭据归属用户；None 表示本机默认作用域（与全局模型配置对应）
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, default=None
+    )
+    name: Mapped[str] = mapped_column(String(120), index=True)
+    #: ``v1.<nonce>.<ciphertext>`` 形式的密文，绝不含明文
+    key_cipher: Mapped[str] = mapped_column(Text, default="")
+    #: 不可逆尾号提示，供界面显示（如 ``sk-1****7890``）
+    key_hint: Mapped[str] = mapped_column(String(64), default="")
+    status: Mapped[str] = mapped_column(String(16), default=CREDENTIAL_ACTIVE)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<LLMCredentialRow name={self.name!r} status={self.status!r}>"
 
 
 class AppSettingsRow(Base):

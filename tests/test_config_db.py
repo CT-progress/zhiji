@@ -6,11 +6,12 @@ import json
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
 
 from zhiji.config import JSON_BACKEND, ConfigManager
 from zhiji.errors import ZhijiError
 from zhiji.models import AppConfig, AppSettings, LLMModelConfig, PlatformSettings
-from zhiji.storage import reset_database
+from zhiji.storage import Database, LLMCredentialRow, ModelConfigRow, reset_database
 
 
 def _sample_config() -> AppConfig:
@@ -133,3 +134,67 @@ def test_default_backend_uses_process_database(
         assert second.get_model("进程库模型") is not None
     finally:
         reset_database()
+
+
+def _raw_models(db_path: Path) -> list[ModelConfigRow]:
+    db = Database(f"sqlite:///{db_path.as_posix()}")
+    try:
+        with db.session_scope() as session:
+            return list(session.scalars(select(ModelConfigRow)))
+    finally:
+        db.dispose()
+
+
+def _raw_credentials(db_path: Path) -> list[LLMCredentialRow]:
+    db = Database(f"sqlite:///{db_path.as_posix()}")
+    try:
+        with db.session_scope() as session:
+            return list(session.scalars(select(LLMCredentialRow)))
+    finally:
+        db.dispose()
+
+
+def test_llm_key_is_encrypted_at_rest_and_json_is_sanitized(tmp_path: Path) -> None:
+    path = tmp_path / "zhiji.json"
+    secret = "sk-verysecret-abcdefghijklmnop"
+    cm = ConfigManager(path)
+    cm.add_model(LLMModelConfig(name="DeepSeek", api_key=secret, model="deepseek-chat"))
+
+    # 模型配置表里没有明文；凭据表里是密文
+    models = _raw_models(tmp_path / "zhiji.db")
+    assert [m.api_key for m in models] == [""]
+    creds = _raw_credentials(tmp_path / "zhiji.db")
+    assert len(creds) == 1
+    assert creds[0].key_cipher.startswith("v1.")
+    assert secret not in creds[0].key_cipher
+    assert creds[0].key_hint == "sk-v****mnop"
+
+    # 导出的 JSON 不含明文 Key
+    raw = path.read_text(encoding="utf-8")
+    assert secret not in raw
+    assert json.loads(raw)["models"][0]["api_key"] == ""
+
+    # 重新加载时内存里仍是可用明文
+    reloaded = ConfigManager(path)
+    assert reloaded.get_model("DeepSeek").api_key == secret  # type: ignore[union-attr]
+
+
+def test_update_without_key_keeps_stored_key(tmp_path: Path) -> None:
+    path = tmp_path / "zhiji.json"
+    cm = ConfigManager(path)
+    cm.add_model(LLMModelConfig(name="A", api_key="sk-keepme-1234567890"))
+    cm.update_model("A", {"model": "deepseek-reasoner"})  # 未提供 api_key
+
+    reloaded = ConfigManager(path)
+    model = reloaded.get_model("A")
+    assert model is not None
+    assert model.api_key == "sk-keepme-1234567890"
+    assert model.model == "deepseek-reasoner"
+
+
+def test_delete_model_removes_credential(tmp_path: Path) -> None:
+    path = tmp_path / "zhiji.json"
+    cm = ConfigManager(path)
+    cm.add_model(LLMModelConfig(name="A", api_key="sk-1-1234567890"))
+    cm.delete_model("A")
+    assert _raw_credentials(tmp_path / "zhiji.db") == []

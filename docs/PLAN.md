@@ -14,7 +14,7 @@
 | **总体路线** | 6 个阶段：工程底座 → 持久化 → 异步任务 → 账号隔离 → 凭据安全 → 容器部署 |
 | **语言策略** | 先用 Python 打通业务闭环；Java 控制面放到最后的可选阶段 |
 | **实施原则** | 不重写、只叠加；每一步测试全绿；每一步可独立回滚 |
-| **当前状态** | 阶段 0、1、2、3 已完成；阶段 4 的 4.1 加密模块已完成（本机提交，未推送） |
+| **当前状态** | 阶段 0、1、2、3 已完成；阶段 4 的 4.1 加密模块、4.2 LLM Key 入库已完成（本机提交，未推送） |
 
 ---
 
@@ -176,7 +176,7 @@
 | 迭代 | 内容 | 验收标准 |
 | --- | --- | --- |
 | ✅ **4.1 加密模块** | `cryptography` 实现 AES-256-GCM；主密钥来自环境变量 / 本机密钥文件 | 加解密与防篡改有测试；主密钥不入库、不入 Git |
-| **4.2 LLM Key 入库** | `config/zhiji.json` 中的 Key 迁入 `llm_credential` 表（密文） | Key 明文只在写入瞬间出现；界面只显示掩码 |
+| ✅ **4.2 LLM Key 入库** | `config/zhiji.json` 中的 Key 迁入 `llm_credential` 表（密文） | Key 明文只在写入瞬间出现；界面只显示掩码 |
 | **4.3 Cookie 入库** | `data/*-profile.json` 迁入 `platform_credential` 表（密文） | 迁移后删除明文文件；抓取功能不回退 |
 | **4.4 凭据健康检查** | 提供"检测凭据是否有效"接口；记录检测时间与结果 | 界面可手动触发检测并看到结果 |
 
@@ -195,6 +195,21 @@
 
 **4.1 验收**：`tests/test_crypto.py` 35 项用例覆盖加解密、随机性、篡改、错密钥、
 AAD 绑定、格式损坏、密钥解析顺序与落盘；主密钥不入库、不进 Git。
+
+**4.2 落地细节**
+
+- 新增 `llm_credentials` 表（`user_id` / `name` / `key_cipher` / `key_hint` / `status` / 时间戳），
+  `(user_id, name)` 唯一；新增 `src/zhiji/storage/credential_repository.py` 承载读写；
+- 主密钥默认放在数据库同目录的 `.master_key`（`ZHIJI_MASTER_KEY` / `ZHIJI_MASTER_KEY_PATH` 仍可覆盖）；
+  密文 AAD 绑定「用户 + 用途」，密文被搬到别的账号或别的模型名下会解密失败；
+- `model_configs.api_key` 列与 `config/zhiji.json` 中的 Key 恒为空，密钥只以密文形式存在凭据表里；
+  写配置时加密入库、读配置时解密回填、界面与日志只暴露 `前4****后4` 掩码；
+- 一次性迁移 `python -m zhiji.migrate --migrate-keys`（幂等，支持 `--dry-run`）把历史明文 Key
+  加密入库并清空明文列；迁移结束执行 `VACUUM` 重建库文件，抹掉 SQLite 空闲页里的旧明文残影。
+
+**4.2 验收**：`tests/test_credentials.py`、`test_config_db.py`、`test_migrate.py` 覆盖往返加解密、
+AAD 绑定、用户作用域隔离、更新不丢 Key、删除模型连带删凭据、迁移幂等与「库文件与旁文件均查不到明文」；
+对真实 `data/zhiji.db` + `config/zhiji.json` 迁移后复查无任何明文残影，`ConfigManager` 仍能解密读到 3 个模型 Key。
 
 ---
 
@@ -267,23 +282,24 @@ AAD 绑定、格式损坏、密钥解析顺序与落盘；主密钥不入库、�
 
 ## 9. 下一步
 
-**进入阶段 4 · 迭代 4.2：LLM Key 入库**
+**进入阶段 4 · 迭代 4.3：Cookie 入库**
 
-阶段 4 · 4.1 已完成：
+阶段 4 · 4.1、4.2 已完成：
 
-- 新增 `src/zhiji/security/`：主密钥解析 + AES-256-GCM 加解密，密文自带版本号与认证标签；
-- 主密钥默认落在 `data/.master_key`（已 gitignore，权限 0600），也可用 `ZHIJI_MASTER_KEY` 显式提供；
-- 换密钥、篡改密文、AAD 不符、格式损坏等情况一律解密失败，测试覆盖以上全部路径；
-- 新增 `CryptoError` / `MasterKeyError` 两个稳定错误码，方便界面提示与排查。
+- 4.1：AES-256-GCM 加密模块 + 主密钥解析落盘（默认 `data/.master_key`，已 gitignore）；
+  换密钥、篡改密文、AAD 不符、格式损坏一律解密失败，绝不返回错误明文；
+- 4.2：LLM Key 全部加密进 `llm_credentials` 表，`model_configs.api_key` 与 `config/zhiji.json` 不再留明文，
+  界面与日志只显示 `前4****后4` 掩码；历史明文用 `python -m zhiji.migrate --migrate-keys` 一次性迁移
+  （幂等、可 `--dry-run`），迁移后 `VACUUM` 重建库文件，抹掉 SQLite 空闲页里的旧明文残影。
 
-4.2 要做的具体内容：
+4.3 要做的具体内容：
 
-1. 新增 `llm_credential` 表（`user_id` + 模型名 + 密文 + 尾号掩码 + 状态），密文列沿用 4.1 的 `CredentialCipher`；
-2. 把 `config/zhiji.json` 里的 Key 通过一次性迁移脚本导入（幂等），迁移后 JSON 中的 Key 清空；
-3. Web 配置页与 CLI 的读写路径改走凭据仓储：写入时加密、读取时解密、展示时只给掩码；
-4. 没有账号体系的历史数据（`user_id IS NULL`）沿用本机默认作用域。
+1. 新增 `platform_credentials` 表（`user_id` + 平台名 + 密文 + 尾号掩码 + 状态 + 时间戳），密文列沿用 4.1 的 `CredentialCipher`；
+2. 把 `data/*-profile.json`（登录态 / Cookie）通过一次性迁移脚本加密导入，幂等且支持 `--dry-run`；
+3. 抓取链路改为从凭据表取 Cookie：调用方不再直接读明文文件，迁移后删除明文 profile 文件；
+4. 保留「Cookie 失效 → 提示重新登录」的既有行为，抓取功能不回退。
 
-**验收**：数据库里查不到任何明文 Key；`config/zhiji.json` 不再含 Key；配置页仍能新增 / 修改 / 切换模型且生成笔记不回退。
+**验收**：磁盘上不再有明文 Cookie 文件；抓取 / 转写 / 笔记生成端到端仍可跑通；界面只显示掩码。
 
 ### 迭代记录
 
@@ -301,3 +317,4 @@ AAD 绑定、格式损坏、密钥解析顺序与落盘；主密钥不入库、�
 | 3.3 数据隔离 | ✅ 完成 | 232 passed / ruff 全绿 / mypy 42 files；会话 / 任务写入绑定用户，跨用户读写删返回 404 / 空，`NULL` 历史数据本机作用域与旧库补列迁移均有测试覆盖 |
 | 3.4 前端登录页 | ✅ 完成 | 232 passed / ruff 全绿 / mypy 42 files / `node --check` 通过；临时数据库 + Edge 无头浏览器实际验证注册、登录、刷新保持会话、登出，匿名时业务页保持隐藏 |
 | 4.1 加密模块 | ✅ 完成 | 267 passed / ruff 全绿 / mypy 44 files；加解密、随机 nonce、篡改、错密钥、AAD 绑定、密钥解析顺序与落盘全覆盖；主密钥不入库、不进 Git |
+| 4.2 LLM Key 入库 | ✅ 完成 | 285 passed / ruff 全绿 / mypy 45 files / `node --check` 通过；Key 明文不再落库、JSON 导出与界面只给掩码、迁移幂等且 `VACUUM` 后库文件无明文残影；真实库迁移后仍可解密读回 3 个 Key |

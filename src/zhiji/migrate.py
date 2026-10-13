@@ -21,17 +21,19 @@ from sqlalchemy import func, select, update
 
 from zhiji.auth import normalize_username
 from zhiji.chat import DATA_DIR, Conversation, conversation_to_row
-from zhiji.config import read_config_file
+from zhiji.config import default_config_path, read_config_file
 from zhiji.errors import ZhijiError
 from zhiji.models import AppConfig
 from zhiji.storage import (
     ConfigRepository,
     ConversationRow,
     Database,
+    ModelConfigRow,
     TaskRow,
     UserRepository,
     get_database,
 )
+from zhiji.storage.credential_repository import read_credential, set_credential
 
 
 @dataclass(frozen=True)
@@ -116,6 +118,119 @@ def import_config(
     return ConfigImportResult(models=len(config.models), imported=True)
 
 
+@dataclass(frozen=True)
+class CredentialKeyResult:
+    """一次「明文 LLM Key -> 加密凭据表」迁移的统计。"""
+
+    found: int
+    migrated: int
+    already_stored: int
+    cleared_rows: int
+    json_cleared: bool
+    dry_run: bool = False
+
+
+def migrate_llm_keys(
+    database: Database,
+    config_path: str | Path | None = None,
+    *,
+    dry_run: bool = False,
+) -> CredentialKeyResult:
+    """把明文 LLM Key 加密迁入 ``llm_credentials``，并清空明文来源。
+
+    数据源是「数据库 ``model_configs.api_key``」与「配置文件里的 ``api_key``」
+    的并集；已经在凭据表里的模型不覆盖。迁移是幂等的：第二次运行时已无明文可迁。
+    整个过程只看得到密文与掩码，不打印也不返回任何明文 Key。
+    """
+
+    database.create_all()
+    repository = ConfigRepository(database)
+    cipher = repository.credentials.cipher
+    path = Path(config_path) if config_path is not None else None
+    json_config = read_config_file(path) if path is not None and path.exists() else None
+
+    session = database.session()
+    try:
+        rows = list(session.scalars(select(ModelConfigRow)))
+        candidates: dict[str, str] = {}
+        for row in rows:
+            key = (row.api_key or "").strip()
+            if key:
+                candidates.setdefault(row.name, key)
+        if json_config is not None:
+            for model in json_config.models:
+                key = (model.api_key or "").strip()
+                if key:
+                    candidates.setdefault(model.name, key)
+
+        migrated = 0
+        already_stored = 0
+        for name, key in candidates.items():
+            if read_credential(session, cipher, name) is not None:
+                already_stored += 1
+                continue
+            migrated += 1
+            if not dry_run:
+                set_credential(session, cipher, name, key)
+
+        cleared_rows = 0
+        for row in rows:
+            if (row.api_key or "").strip():
+                cleared_rows += 1
+                if not dry_run:
+                    row.api_key = ""
+        if dry_run:
+            session.rollback()
+        else:
+            session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+    json_cleared = False
+    if path is not None and json_config is not None and any(m.api_key for m in json_config.models):
+        # dry-run 时表示「计划会清空」；真实运行时才落盘。
+        json_cleared = True
+        if not dry_run:
+            _clear_config_file(path, json_config)
+
+    if not dry_run:
+        # SQLite 的 UPDATE/DELETE 只是把旧行标记为空闲，明文仍可能留在页里；
+        # VACUUM 重建库文件，确保「库里查不到明文」这件事真的成立。
+        _vacuum_sqlite(database)
+
+    return CredentialKeyResult(
+        found=len(candidates),
+        migrated=migrated,
+        already_stored=already_stored,
+        cleared_rows=cleared_rows,
+        json_cleared=json_cleared,
+        dry_run=dry_run,
+    )
+
+
+def _vacuum_sqlite(database: Database) -> None:
+    """重建 SQLite 库文件，清除删除 / 更新后残留在空闲页里的旧数据。"""
+
+    if not database.url.startswith("sqlite") or ":memory:" in database.url:
+        return
+    with database.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        conn.exec_driver_sql("VACUUM")
+
+
+def _clear_config_file(path: Path, config: AppConfig) -> None:
+    """把配置文件里的 Key 清空后重新落盘（保留其它字段）。"""
+
+    payload = config.model_dump(mode="json")
+    for model in payload.get("models", []):
+        model["api_key"] = ""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
 def assign_legacy_data(
     database: Database, username: str, *, dry_run: bool = False
 ) -> tuple[int, int]:
@@ -176,12 +291,30 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--dry-run", action="store_true", help="只统计不写入")
     parser.add_argument(
+        "--migrate-keys",
+        action="store_true",
+        help="把配置文件 / 数据库里的明文 LLM Key 加密迁入凭据表并清空明文",
+    )
+    parser.add_argument(
         "--assign-user",
         dest="assign_user",
         default=None,
         help="把 user_id 为空的历史会话 / 任务认领给该用户",
     )
     args = parser.parse_args(argv)
+
+    if args.migrate_keys:
+        database = Database(args.database_url) if args.database_url else get_database()
+        config_path = Path(args.config_path) if args.config_path else default_config_path()
+        key_result = migrate_llm_keys(database, config_path, dry_run=args.dry_run)
+        prefix = "[dry-run] " if key_result.dry_run else ""
+        print(
+            f"{prefix}发现 {key_result.found} 个明文 Key：新加密 {key_result.migrated} 个，"
+            f"已在库中 {key_result.already_stored} 个；"
+            f"清空数据库明文列 {key_result.cleared_rows} 处，"
+            f"配置文件{'将清空' if key_result.dry_run and key_result.json_cleared else ('已清空' if key_result.json_cleared else '无需清空')}"
+        )
+        return 0
 
     if args.assign_user:
         database = Database(args.database_url) if args.database_url else get_database()

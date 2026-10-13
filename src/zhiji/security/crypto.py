@@ -32,7 +32,10 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from zhiji.errors import CryptoError, MasterKeyError
-from zhiji.storage.db import PROJECT_ROOT
+
+#: 项目根目录。本地定义，避免 security <- storage 的循环导入
+#: （storage 的 __init__ 会反向 import 本模块的加解密能力）。
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 #: 主密钥环境变量：内容是 URL-safe Base64 或十六进制编码的 32 字节密钥。
 MASTER_KEY_ENV = "ZHIJI_MASTER_KEY"
@@ -137,6 +140,21 @@ def key_fingerprint(key: bytes) -> str:
     """给主密钥算一个短指纹，用于日志与诊断（不泄露密钥本身）。"""
 
     return hashlib.sha256(b"zhiji-master-key\x00" + key).hexdigest()[:12]
+
+
+def mask_credential(value: str) -> str:
+    """把凭据处理成不可逆的展示提示：保留前 4 位与后 4 位。
+
+    长度不足 8 位时整体打码，避免短密钥被反推出内容。这是界面与 CLI
+    唯一可见的形态，密文与明文都不会外泄。
+    """
+
+    text = (value or "").strip()
+    if not text:
+        return ""
+    if len(text) <= 8:
+        return "*" * len(text)
+    return f"{text[:4]}****{text[-4:]}"
 
 
 class CredentialCipher:

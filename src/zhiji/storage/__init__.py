@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from zhiji.storage.config_repository import ConfigRepository
+from zhiji.storage.credential_repository import CredentialRepository
 from zhiji.storage.db import (
     DEFAULT_DB_RELATIVE,
     Database,
@@ -14,11 +15,14 @@ from zhiji.storage.db import (
 )
 from zhiji.storage.repository import TERMINAL_STATUSES, TaskRepository
 from zhiji.storage.tables import (
+    CREDENTIAL_ACTIVE,
+    CREDENTIAL_UNSET,
     SETTINGS_ROW_ID,
     AppSettingsRow,
     Base,
     ConversationMessageRow,
     ConversationRow,
+    LLMCredentialRow,
     ModelConfigRow,
     TaskRow,
     UserRow,
@@ -26,6 +30,8 @@ from zhiji.storage.tables import (
 from zhiji.storage.user_repository import UserRepository
 
 __all__ = [
+    "CREDENTIAL_ACTIVE",
+    "CREDENTIAL_UNSET",
     "DEFAULT_DB_RELATIVE",
     "SETTINGS_ROW_ID",
     "TERMINAL_STATUSES",
@@ -34,7 +40,9 @@ __all__ = [
     "ConfigRepository",
     "ConversationMessageRow",
     "ConversationRow",
+    "CredentialRepository",
     "Database",
+    "LLMCredentialRow",
     "ModelConfigRow",
     "TaskRepository",
     "TaskRow",
