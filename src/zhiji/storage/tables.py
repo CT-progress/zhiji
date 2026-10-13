@@ -159,9 +159,12 @@ class ModelConfigRow(Base):
         return f"<ModelConfigRow name={self.name!r}>"
 
 
-#: 凭据状态：active = 有可用密文；unset = 未设置或已清空。
+#: 凭据状态：active = 有可用密文（未检测或检测正常）；expired = 检测确认已失效；
+#: error = 检测异常（网络/接口问题，不等于凭据失效）；unset = 未设置或已清空。
 CREDENTIAL_ACTIVE = "active"
 CREDENTIAL_UNSET = "unset"
+CREDENTIAL_EXPIRED = "expired"
+CREDENTIAL_ERROR = "error"
 
 
 class LLMCredentialRow(Base):
@@ -187,6 +190,11 @@ class LLMCredentialRow(Base):
     #: 不可逆尾号提示，供界面显示（如 ``sk-1****7890``）
     key_hint: Mapped[str] = mapped_column(String(64), default="")
     status: Mapped[str] = mapped_column(String(16), default=CREDENTIAL_ACTIVE)
+    #: 最近一次健康检查时间与失败摘要（阶段 4.4）；摘要不含任何 Key / Cookie 片段
+    last_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    last_error: Mapped[str] = mapped_column(String(200), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
@@ -227,6 +235,11 @@ class PlatformCredentialRow(Base):
     #: 零泄露提示（如 ``6 项``），供界面显示
     hint: Mapped[str] = mapped_column(String(64), default="")
     status: Mapped[str] = mapped_column(String(16), default=CREDENTIAL_ACTIVE)
+    #: 最近一次健康检查时间与失败摘要（阶段 4.4）；摘要不含任何 Key / Cookie 片段
+    last_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    last_error: Mapped[str] = mapped_column(String(200), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow

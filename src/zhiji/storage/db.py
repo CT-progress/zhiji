@@ -104,9 +104,15 @@ class Database:
         self._ensure_added_columns()
 
     #: 后续版本新增的「可空」列：建表无法补列，这里做幂等的轻量迁移。
-    _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
-        ("conversations", "user_id", "VARCHAR(36)"),
-        ("tasks", "user_id", "VARCHAR(36)"),
+    #: 元组含义为 (表名, 列名, 列类型, 是否建索引)。
+    _ADDED_COLUMNS: tuple[tuple[str, str, str, bool], ...] = (
+        ("conversations", "user_id", "VARCHAR(36)", True),
+        ("tasks", "user_id", "VARCHAR(36)", True),
+        # 阶段 4.4：凭据健康检查的检测时间与失败摘要。
+        ("llm_credentials", "last_checked_at", "DATETIME", False),
+        ("llm_credentials", "last_error", "VARCHAR(200)", False),
+        ("platform_credentials", "last_checked_at", "DATETIME", False),
+        ("platform_credentials", "last_error", "VARCHAR(200)", False),
     )
 
     def _ensure_added_columns(self) -> None:
@@ -115,7 +121,7 @@ class Database:
         inspector = inspect(self.engine)
         tables = set(inspector.get_table_names())
         with self.engine.begin() as conn:
-            for table, column, ddl_type in self._ADDED_COLUMNS:
+            for table, column, ddl_type, _indexed in self._ADDED_COLUMNS:
                 if table not in tables:
                     continue
                 existing = {col["name"] for col in inspector.get_columns(table)}
@@ -124,8 +130,8 @@ class Database:
                 conn.exec_driver_sql(
                     f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"
                 )
-            for table, column, _ in self._ADDED_COLUMNS:
-                if table in tables:
+            for table, column, _ddl_type, indexed in self._ADDED_COLUMNS:
+                if indexed and table in tables:
                     conn.exec_driver_sql(
                         f"CREATE INDEX IF NOT EXISTS ix_{table}_{column} "
                         f"ON {table} ({column})"

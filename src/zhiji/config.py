@@ -21,6 +21,7 @@ from zhiji.models import AppConfig, AppSettings, LLMModelConfig
 from zhiji.security.crypto import mask_credential
 from zhiji.storage import Database, get_database
 from zhiji.storage.config_repository import ConfigRepository
+from zhiji.storage.credential_repository import CredentialRepository
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
@@ -141,6 +142,12 @@ class ConfigManager:
         for model in data.get("models", []):
             model["api_key"] = ""
         return data
+
+    @property
+    def credentials(self) -> CredentialRepository | None:
+        """LLM Key 的密文仓储；JSON 文件后端没有这一层，返回 ``None``。"""
+
+        return self._repository.credentials if self._repository is not None else None
 
     def get(self) -> AppConfig:
         return self._config

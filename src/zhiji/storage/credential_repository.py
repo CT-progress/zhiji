@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -35,6 +36,42 @@ from zhiji.security.crypto import (
 from zhiji.storage.db import Database, lock_for_key
 from zhiji.storage.scope import ANY_USER, UserScope
 from zhiji.storage.tables import CREDENTIAL_ACTIVE, LLMCredentialRow
+
+#: 失败摘要入库前的最大长度，与凭据行 ``last_error`` 的列宽保持一致。
+CHECK_DETAIL_LIMIT = 200
+
+
+def parse_check_moment(checked_at: str | None) -> datetime:
+    """解析 ISO 时间文本；缺失或格式非法时回退到当前时间。"""
+
+    if checked_at:
+        try:
+            parsed = datetime.fromisoformat(checked_at)
+        except ValueError:
+            parsed = None
+        if parsed is not None:
+            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+    return datetime.now(UTC)
+
+
+def clip_check_detail(detail: str, *, limit: int = CHECK_DETAIL_LIMIT) -> str:
+    """压缩并截断失败摘要；调用方负责摘要里不含任何凭据片段。"""
+
+    return " ".join((detail or "").split())[:limit]
+
+
+def iso_or_empty(moment: datetime | None) -> str:
+    """把检测时间转成 ISO 文本；未检测过时返回空串。
+
+    SQLite 不保存时区，取回的 ``datetime`` 是 naive 的纯 UTC 值；这里补回 UTC
+    标记，避免前端把它当本地时间解析、显示时偏移一个时区。
+    """
+
+    if moment is None:
+        return ""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    return moment.isoformat(timespec="seconds")
 
 
 def credential_aad(user_id: UserScope, name: str) -> str:
@@ -171,6 +208,45 @@ class CredentialRepository:
         with self.database.session_scope() as session:
             row = find_credential_row(session, name, user_id)
             return row is not None and bool(row.key_cipher)
+
+    def record_check(
+        self,
+        name: str,
+        status: str,
+        detail: str = "",
+        *,
+        user_id: UserScope = None,
+        checked_at: str | None = None,
+    ) -> bool:
+        """把一次健康检查的结果写回该模型的行；行不存在时返回 False（绝不新建行）。"""
+
+        moment = parse_check_moment(checked_at)
+        with self._lock, self.database.session_scope() as session:
+            row = find_credential_row(session, name, user_id)
+            if row is None:
+                return False
+            row.status = status or CREDENTIAL_ACTIVE
+            row.last_checked_at = moment
+            row.last_error = "" if row.status == CREDENTIAL_ACTIVE else clip_check_detail(detail)
+            return True
+
+    def statuses(self, *, user_id: UserScope = None) -> dict[str, dict[str, Any]]:
+        """返回 {模型名: {status, hint, last_checked_at, last_error}}；纯读库不发请求。"""
+
+        with self.database.session_scope() as session:
+            stmt = select(LLMCredentialRow)
+            condition = _scope_filter(user_id)
+            if condition is not None:
+                stmt = stmt.where(condition)
+            return {
+                row.name: {
+                    "status": row.status,
+                    "hint": row.key_hint,
+                    "last_checked_at": iso_or_empty(row.last_checked_at),
+                    "last_error": row.last_error or "",
+                }
+                for row in session.scalars(stmt)
+            }
 
     def list_hints(self, *, user_id: UserScope = None) -> dict[str, str]:
         """返回 {模型名: 掩码提示}，用于界面展示，绝不返回明文。"""

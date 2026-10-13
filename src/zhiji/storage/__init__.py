@@ -17,6 +17,8 @@ from zhiji.storage.platform_credential_repository import PlatformCredentialRepos
 from zhiji.storage.repository import TERMINAL_STATUSES, TaskRepository
 from zhiji.storage.tables import (
     CREDENTIAL_ACTIVE,
+    CREDENTIAL_ERROR,
+    CREDENTIAL_EXPIRED,
     CREDENTIAL_UNSET,
     SETTINGS_ROW_ID,
     AppSettingsRow,
@@ -33,6 +35,8 @@ from zhiji.storage.user_repository import UserRepository
 
 __all__ = [
     "CREDENTIAL_ACTIVE",
+    "CREDENTIAL_ERROR",
+    "CREDENTIAL_EXPIRED",
     "CREDENTIAL_UNSET",
     "DEFAULT_DB_RELATIVE",
     "SETTINGS_ROW_ID",

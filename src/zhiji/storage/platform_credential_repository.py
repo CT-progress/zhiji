@@ -26,7 +26,12 @@ from sqlalchemy.orm import Session
 
 from zhiji.errors import CryptoError
 from zhiji.security.crypto import CredentialCipher
-from zhiji.storage.credential_repository import cipher_for_database
+from zhiji.storage.credential_repository import (
+    cipher_for_database,
+    clip_check_detail,
+    iso_or_empty,
+    parse_check_moment,
+)
 from zhiji.storage.db import Database, lock_for_key
 from zhiji.storage.scope import ANY_USER, UserScope
 from zhiji.storage.tables import CREDENTIAL_ACTIVE, PlatformCredentialRow
@@ -193,6 +198,45 @@ class PlatformCredentialRepository:
         with self.database.session_scope() as session:
             row = find_platform_row(session, platform, user_id)
             return row is not None and bool(row.payload_cipher)
+
+    def record_check(
+        self,
+        platform: str,
+        status: str,
+        detail: str = "",
+        *,
+        user_id: UserScope = None,
+        checked_at: str | None = None,
+    ) -> bool:
+        """把一次健康检查的结果写回该平台的行；行不存在时返回 False（绝不新建行）。"""
+
+        moment = parse_check_moment(checked_at)
+        with self._lock, self.database.session_scope() as session:
+            row = find_platform_row(session, platform, user_id)
+            if row is None:
+                return False
+            row.status = status or CREDENTIAL_ACTIVE
+            row.last_checked_at = moment
+            row.last_error = "" if row.status == CREDENTIAL_ACTIVE else clip_check_detail(detail)
+            return True
+
+    def statuses(self, *, user_id: UserScope = None) -> dict[str, dict[str, Any]]:
+        """返回 {平台: {status, hint, last_checked_at, last_error}}；纯读库不发请求。"""
+
+        with self.database.session_scope() as session:
+            stmt = select(PlatformCredentialRow)
+            condition = _scope_filter(user_id)
+            if condition is not None:
+                stmt = stmt.where(condition)
+            return {
+                row.platform: {
+                    "status": row.status,
+                    "hint": row.hint,
+                    "last_checked_at": iso_or_empty(row.last_checked_at),
+                    "last_error": row.last_error or "",
+                }
+                for row in session.scalars(stmt)
+            }
 
     def list_hints(self, *, user_id: UserScope = None) -> dict[str, str]:
         """返回 {平台: 提示}，用于界面展示，绝不返回明文。"""

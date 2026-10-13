@@ -8,7 +8,7 @@ import os
 import queue
 import re
 import threading
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -35,15 +35,28 @@ from zhiji.errors import (
     ConfigError,
     DuplicateUserError,
     GenerationCancelledError,
+    InputUnsupportedError,
     LLMError,
     TaskNotFoundError,
     TaskTransitionError,
     ZhijiError,
     error_response,
 )
+from zhiji.health import (
+    HEALTH_UNCONFIGURED,
+    PLATFORM_META,
+    PLATFORM_PROBE_SOURCES,
+    SOURCE_LOCAL,
+    SOURCE_REMOTE,
+    CheckResult,
+    check_llm,
+    check_platform,
+    now_iso,
+    summarize,
+)
 from zhiji.llm.client import LLMClient
 from zhiji.models import LLMModelConfig, TaskStatus
-from zhiji.platforms.cookies import set_profile_database
+from zhiji.platforms.cookies import profile_repository, set_profile_database
 from zhiji.storage import TaskRepository
 from zhiji.storage.scope import ANY_USER, UserScope
 from zhiji.storage.tables import TaskRow, UserRow
@@ -107,6 +120,13 @@ class SubmitTaskRequest(BaseModel):
     platform: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
     priority: int = 0
+
+
+class CredentialCheckRequest(BaseModel):
+    """手动触发一次凭据健康检查的请求体。"""
+
+    kind: str = Field(min_length=1, description="platform 或 llm")
+    name: str = Field(min_length=1)
 
 
 class GenerateNoteRequest(BaseModel):
@@ -531,7 +551,19 @@ def create_app(
 
     @app.get("/api/models")
     def list_models() -> dict:
-        return {"models": [_public(m) for m in config.get().models]}
+        statuses = _llm_status_rows(config)
+        return {
+            "models": [
+                {
+                    **_public(model),
+                    "health": _health_payload(
+                        configured=_llm_configured(config, model.name, statuses),
+                        row=statuses.get(model.name),
+                    ),
+                }
+                for model in config.get().models
+            ]
+        }
 
     @app.post("/api/models")
     def create_model(model: LLMModelConfig) -> dict:
@@ -750,41 +782,118 @@ def create_app(
         from zhiji.platforms.zhihu_cookies import load_profile as load_zhihu_profile
 
         enabled = config.get().settings.platforms
+        statuses = _platform_status_rows()
+        profiles = {
+            "douyin": load_douyin_profile(),
+            "bilibili": load_bilibili_profile(),
+            "zhihu": load_zhihu_profile(),
+            "xiaohongshu": load_xiaohongshu_profile(),
+        }
+
+        def card(
+            key: str,
+            name: str,
+            desc: str,
+            placeholder: str,
+            is_enabled: bool,
+        ) -> dict[str, Any]:
+            """一张平台卡片：开关、登录态是否已配置、最近一次健康检查结果。"""
+
+            configured = bool(profiles[key])
+            return {
+                "key": key,
+                "name": name,
+                "desc": desc,
+                "placeholder": placeholder,
+                "enabled": is_enabled,
+                "cookie_configured": configured,
+                "health": _health_payload(configured=configured, row=statuses.get(key)),
+            }
+
         cards = [
-            {
-                "key": "douyin",
-                "name": "抖音",
-                "desc": "短视频 → 音频拦截 + 本地转写",
-                "placeholder": "https://v.douyin.com/xxxx/ 或视频页链接",
-                "enabled": enabled.douyin,
-                "cookie_configured": bool(load_douyin_profile()),
-            },
-            {
-                "key": "bilibili",
-                "name": "B 站",
-                "desc": "官方字幕（可选登录）/ 音频转写笔记",
-                "placeholder": "https://www.bilibili.com/video/BV…",
-                "enabled": enabled.bilibili,
-                "cookie_configured": bool(load_bilibili_profile()),
-            },
-            {
-                "key": "zhihu",
-                "name": "知乎",
-                "desc": "文章 / 回答 → 图文笔记",
-                "placeholder": "https://zhuanlan.zhihu.com/p/…",
-                "enabled": enabled.zhihu,
-                "cookie_configured": bool(load_zhihu_profile()),
-            },
-            {
-                "key": "xiaohongshu",
-                "name": "小红书",
-                "desc": "图文 / 视频笔记 → 正文与媒体信息",
-                "placeholder": "https://www.xiaohongshu.com/explore/… 或 https://xhslink.com/…",
-                "enabled": enabled.xiaohongshu,
-                "cookie_configured": bool(load_xiaohongshu_profile()),
-            },
+            card(
+                "douyin",
+                "抖音",
+                "短视频 → 音频拦截 + 本地转写",
+                "https://v.douyin.com/xxxx/ 或视频页链接",
+                enabled.douyin,
+            ),
+            card(
+                "bilibili",
+                "B 站",
+                "官方字幕（可选登录）/ 音频转写笔记",
+                "https://www.bilibili.com/video/BV…",
+                enabled.bilibili,
+            ),
+            card(
+                "zhihu",
+                "知乎",
+                "文章 / 回答 → 图文笔记",
+                "https://zhuanlan.zhihu.com/p/…",
+                enabled.zhihu,
+            ),
+            card(
+                "xiaohongshu",
+                "小红书",
+                "图文 / 视频笔记 → 正文与媒体信息",
+                "https://www.xiaohongshu.com/explore/… 或 https://xhslink.com/…",
+                enabled.xiaohongshu,
+            ),
         ]
         return {"platforms": cards}
+
+    @app.get("/api/credentials/health")
+    def credentials_health() -> dict:
+        """凭据健康一览：只读数据库，不发任何第三方请求。"""
+
+        platform_rows = _platform_status_rows()
+        configured_platforms = set(platform_rows)
+        model_rows = _llm_status_rows(config)
+        return {
+            "platforms": [
+                {
+                    "key": key,
+                    "name": name,
+                    "configured": key in configured_platforms,
+                    "probe": PLATFORM_PROBE_SOURCES.get(key, SOURCE_LOCAL),
+                    "health": _health_payload(
+                        configured=key in configured_platforms, row=platform_rows.get(key)
+                    ),
+                }
+                for key, name in PLATFORM_META
+            ],
+            "models": [
+                {
+                    "name": model.name,
+                    "configured": _llm_configured(config, model.name, model_rows),
+                    "probe": SOURCE_REMOTE,
+                    "health": _health_payload(
+                        configured=_llm_configured(config, model.name, model_rows),
+                        row=model_rows.get(model.name),
+                    ),
+                }
+                for model in config.get().models
+            ],
+        }
+
+    @app.post("/api/credentials/check")
+    def check_credential(payload: CredentialCheckRequest) -> dict:
+        """手动触发一次凭据检测：探测 + 结果写回凭据行 + 返回界面。
+
+        不引入任何后台轮询；探测异常一律在 ``zhiji.health`` 内部兜住，
+        因此这里不会因为某个平台/模型不可用而打断主流程。
+        """
+
+        kind = payload.kind.strip().lower()
+        name = payload.name.strip()
+        if kind == "platform":
+            return _check_platform_credential(name)
+        if kind == "llm":
+            return _check_llm_credential(name, config=config)
+        raise InputUnsupportedError(
+            f"不支持的检测类型: {payload.kind}", hint="可选值：platform / llm"
+        )
+
 
     @app.get("/api/cookies/douyin")
     def get_douyin_cookie() -> dict:
@@ -1099,3 +1208,85 @@ def _public(model: LLMModelConfig) -> dict:
     data = model.model_dump(mode="json")
     data["api_key"] = mask_api_key(data.get("api_key", ""))
     return data
+
+
+def _platform_status_rows() -> dict[str, dict[str, Any]]:
+    """一次读出所有平台凭据行的健康字段；读库异常时退化为「没有凭据行」。"""
+
+    try:
+        return profile_repository().statuses()
+    except ZhijiError:
+        return {}
+
+
+def _llm_status_rows(config: ConfigManager) -> dict[str, dict[str, Any]]:
+    """读出所有模型凭据行的健康字段；JSON 文件后端没有这一层，返回空表。"""
+
+    credentials = config.credentials
+    if credentials is None:
+        return {}
+    try:
+        return credentials.statuses()
+    except ZhijiError:
+        return {}
+
+
+def _llm_configured(
+    config: ConfigManager, name: str, rows: Mapping[str, Any] | None = None
+) -> bool:
+    """模型是否已配置 Key：凭据行存在，或全局兜底的 ``LLM_API_KEY`` 非空。"""
+
+    statuses = _llm_status_rows(config) if rows is None else rows
+    if name in statuses:
+        return True
+    return bool(os.getenv("LLM_API_KEY", "").strip())
+
+
+def _health_payload(configured: bool, row: Mapping[str, Any] | None) -> dict[str, str]:
+    """把凭据行的健康字段翻译成界面状态：未配置 / 未检测 / 正常 / 已失效 / 检测异常。"""
+
+    data = row or {}
+    return summarize(
+        configured=configured,
+        status=str(data.get("status") or ""),
+        last_checked_at=str(data.get("last_checked_at") or ""),
+        last_error=str(data.get("last_error") or ""),
+    )
+
+
+def _check_platform_credential(platform: str) -> dict[str, Any]:
+    """探测一次平台登录态并把结果写回凭据行；没有凭据行时不新建行。"""
+
+    result = check_platform(platform)
+    stored = False
+    try:
+        stored = profile_repository().record_check(platform, result.status, result.detail)
+    except ZhijiError:
+        stored = False
+    return {"result": result.as_dict(), "stored": stored}
+
+
+def _check_llm_credential(name: str, *, config: ConfigManager) -> dict[str, Any]:
+    """探测一次模型 Key 的连通性并把结果写回凭据行；未配置 Key 时不发请求。"""
+
+    model = config.get_model(name)
+    if model is None:
+        raise ConfigError(f"模型不存在: {name}")
+    if _llm_configured(config, name):
+        result = check_llm(name, lambda: LLMClient(model).test_connection())
+    else:
+        result = CheckResult(
+            kind="llm",
+            name=name,
+            status=HEALTH_UNCONFIGURED,
+            detail="未配置 Key",
+            checked_at=now_iso(),
+        )
+    credentials = config.credentials
+    stored = False
+    if credentials is not None:
+        try:
+            stored = credentials.record_check(name, result.status, result.detail)
+        except ZhijiError:
+            stored = False
+    return {"result": result.as_dict(), "stored": stored}

@@ -12,6 +12,8 @@ from sqlalchemy import select
 from zhiji.errors import CryptoError
 from zhiji.storage import (
     CREDENTIAL_ACTIVE,
+    CREDENTIAL_ERROR,
+    CREDENTIAL_EXPIRED,
     Database,
     PlatformCredentialRepository,
     PlatformCredentialRow,
@@ -175,3 +177,56 @@ def test_profile_hint_and_aad_helpers() -> None:
     assert profile_hint({"cookie": "no-equals-here"}) == ""
     assert platform_aad("alice", "douyin") == "user:alice/platform:douyin"
     assert platform_aad(None, "douyin") == "user:local/platform:douyin"
+
+
+# ---------------------------------------------------------------------------
+# 阶段 4.4：健康检查结果写回与读取
+# ---------------------------------------------------------------------------
+
+
+def test_record_check_updates_existing_row(repo: PlatformCredentialRepository) -> None:
+    repo.save("douyin", _profile())
+
+    assert repo.record_check("douyin", CREDENTIAL_EXPIRED, "缺少关键 Cookie：sessionid") is True
+
+    rows = repo.statuses()
+    assert rows["douyin"]["status"] == CREDENTIAL_EXPIRED
+    assert rows["douyin"]["last_error"].startswith("缺少关键")
+    assert rows["douyin"]["last_checked_at"]
+    assert rows["douyin"]["hint"] == "2 项"
+
+
+def test_record_check_never_creates_row(repo: PlatformCredentialRepository) -> None:
+    assert repo.record_check("bilibili", CREDENTIAL_ACTIVE, "登录态有效") is False
+    assert repo.statuses() == {}
+    assert repo.is_empty() is True
+
+
+def test_record_check_clears_detail_when_active(
+    repo: PlatformCredentialRepository,
+) -> None:
+    repo.save("douyin", _profile())
+    repo.record_check("douyin", CREDENTIAL_ERROR, "探测异常：TimeoutError")
+    assert repo.statuses()["douyin"]["last_error"] == "探测异常：TimeoutError"
+
+    repo.record_check("douyin", CREDENTIAL_ACTIVE, "")
+    assert repo.statuses()["douyin"]["last_error"] == ""
+
+
+def test_statuses_scope_isolation(
+    database: Database, repo: PlatformCredentialRepository
+) -> None:
+    with database.session_scope() as session:
+        session.add(UserRow(id="alice", username="alice", password_hash="x"))
+
+    repo.save("douyin", _profile("sessionid=local-cookie"), user_id=None)
+    repo.save("douyin", _profile("sessionid=alice-cookie"), user_id="alice")
+    repo.record_check(
+        "douyin", CREDENTIAL_ACTIVE, "", user_id="alice", checked_at="2026-03-03T00:00:00+00:00"
+    )
+
+    assert repo.statuses()["douyin"]["last_checked_at"] == ""
+    assert (
+        repo.statuses(user_id="alice")["douyin"]["last_checked_at"]
+        == "2026-03-03T00:00:00+00:00"
+    )

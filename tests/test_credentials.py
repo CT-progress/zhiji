@@ -11,10 +11,18 @@ from sqlalchemy import select
 from zhiji.errors import CryptoError
 from zhiji.storage import (
     CREDENTIAL_ACTIVE,
+    CREDENTIAL_ERROR,
+    CREDENTIAL_EXPIRED,
     CredentialRepository,
     Database,
     LLMCredentialRow,
     UserRow,
+)
+from zhiji.storage.credential_repository import (
+    CHECK_DETAIL_LIMIT,
+    clip_check_detail,
+    iso_or_empty,
+    parse_check_moment,
 )
 
 PLAINTEXT = "sk-super-secret-1234567890abcdef"
@@ -125,3 +133,69 @@ def test_list_hints_never_returns_plaintext(repo: CredentialRepository) -> None:
     hints = repo.list_hints()
     assert hints == {"a": "sk-s****cdef", "b": "*" * len("sk-2")}
     assert PLAINTEXT not in str(hints)
+
+
+# ---------------------------------------------------------------------------
+# 阶段 4.4：健康检查结果写回与读取
+# ---------------------------------------------------------------------------
+
+
+def test_record_check_updates_existing_row(repo: CredentialRepository) -> None:
+    repo.set_key("deepseek", PLAINTEXT)
+
+    assert repo.record_check("deepseek", CREDENTIAL_EXPIRED, "登录态失效") is True
+
+    rows = repo.statuses()
+    assert rows["deepseek"]["status"] == CREDENTIAL_EXPIRED
+    assert rows["deepseek"]["last_error"] == "登录态失效"
+    assert rows["deepseek"]["last_checked_at"]
+    assert rows["deepseek"]["hint"] == "sk-s****cdef"
+
+
+def test_record_check_never_creates_row(repo: CredentialRepository) -> None:
+    assert repo.record_check("ghost", CREDENTIAL_ERROR, "boom") is False
+    assert repo.statuses() == {}
+    assert repo.is_empty() is True
+
+
+def test_record_check_clears_detail_when_active(repo: CredentialRepository) -> None:
+    repo.set_key("deepseek", PLAINTEXT)
+    repo.record_check("deepseek", CREDENTIAL_ERROR, "探测异常：ConnectError")
+    assert repo.statuses()["deepseek"]["last_error"] == "探测异常：ConnectError"
+
+    repo.record_check("deepseek", CREDENTIAL_ACTIVE, "连通正常")
+    assert repo.statuses()["deepseek"]["last_error"] == ""
+
+
+def test_record_check_clips_and_normalizes_detail(repo: CredentialRepository) -> None:
+    repo.set_key("deepseek", PLAINTEXT)
+    repo.record_check("deepseek", CREDENTIAL_ERROR, "  乱\n  空白" + "x" * 400)
+
+    detail = repo.statuses()["deepseek"]["last_error"]
+    assert detail.startswith("乱 空白")
+    assert "\n" not in detail
+    assert len(detail) == CHECK_DETAIL_LIMIT
+
+
+def test_statuses_scope_isolation(database: Database, repo: CredentialRepository) -> None:
+    with database.session_scope() as session:
+        session.add(UserRow(id="alice", username="alice", password_hash="x"))
+
+    repo.set_key("m", "sk-local-0000", user_id=None)
+    repo.set_key("m", "sk-alice-1111", user_id="alice")
+    repo.record_check(
+        "m", CREDENTIAL_ACTIVE, "", user_id="alice", checked_at="2026-03-03T00:00:00+00:00"
+    )
+
+    assert repo.statuses()["m"]["last_checked_at"] == ""
+    assert repo.statuses(user_id="alice")["m"]["last_checked_at"] == "2026-03-03T00:00:00+00:00"
+
+
+def test_check_detail_helpers() -> None:
+    assert clip_check_detail("  a\n b ") == "a b"
+    assert len(clip_check_detail("x" * 500)) == CHECK_DETAIL_LIMIT
+    assert iso_or_empty(None) == ""
+
+    moment = parse_check_moment("2026-01-01T00:00:00+00:00")
+    assert iso_or_empty(moment) == "2026-01-01T00:00:00+00:00"
+    assert parse_check_moment("2026-01-01T00:00:00").tzinfo is not None

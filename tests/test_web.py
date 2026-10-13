@@ -450,3 +450,208 @@ def test_cookie_saved_as_ciphertext_not_plaintext_file(tmp_path, monkeypatch):
     repo = PlatformCredentialRepository(Database(f"sqlite:///{db_path.as_posix()}"))
     assert repo.has("zhihu") is True
     assert repo.list_hints() == {"zhihu": "2 项"}
+
+
+# ---------------------------------------------------------------------------
+# 阶段 4.4：凭据健康检查接口
+# ---------------------------------------------------------------------------
+
+
+def _isolate_platform_profiles(tmp_path, monkeypatch) -> None:
+    """把四个平台的默认 profile 路径挪进临时目录，避免误读本机遗留明文文件。"""
+
+    from zhiji.platforms import (
+        bilibili_cookies,
+        douyin_cookies,
+        xiaohongshu_cookies,
+        zhihu_cookies,
+    )
+
+    for module in (bilibili_cookies, douyin_cookies, xiaohongshu_cookies, zhihu_cookies):
+        short = module.__name__.rsplit(".", 1)[-1]
+        monkeypatch.setattr(module, "DEFAULT_PROFILE_PATH", tmp_path / f"{short}-profile.json")
+
+
+def _health_cards(client) -> dict:
+    payload = client.get("/api/credentials/health").json()
+    return {card["key"]: card for card in payload["platforms"]}
+
+
+def test_credentials_health_overview_shape(tmp_path, monkeypatch):
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    _isolate_platform_profiles(tmp_path, monkeypatch)
+    client, _ = _client(tmp_path)
+
+    cards = _health_cards(client)
+    assert set(cards) == {"douyin", "bilibili", "zhihu", "xiaohongshu"}
+    assert cards["bilibili"]["probe"] == "remote"
+    assert cards["zhihu"]["probe"] == "remote"
+    assert cards["douyin"]["probe"] == "local"
+    assert cards["xiaohongshu"]["probe"] == "local"
+    for card in cards.values():
+        assert card["configured"] is False
+        assert card["health"]["state"] == "unset"
+        assert card["health"]["label"] == "未配置"
+        assert card["health"]["checked_at"] == ""
+
+    assert client.get("/api/credentials/health").json()["models"] == []
+
+
+def test_credentials_health_reports_models(tmp_path, monkeypatch):
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    client, _ = _client(tmp_path)
+    client.post("/api/models", json={"name": "DeepSeek", "model": "deepseek-chat"})
+
+    models = client.get("/api/credentials/health").json()["models"]
+    assert [m["name"] for m in models] == ["DeepSeek"]
+    assert models[0]["probe"] == "remote"
+    assert models[0]["configured"] is False
+    assert models[0]["health"]["state"] == "unset"
+
+
+def test_platforms_and_models_carry_health(tmp_path, monkeypatch):
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    _isolate_platform_profiles(tmp_path, monkeypatch)
+    client, _ = _client(tmp_path)
+    client.post(
+        "/api/models",
+        json={"name": "DeepSeek", "model": "deepseek-chat", "api_key": "sk-test"},
+    )
+
+    model = client.get("/api/models").json()["models"][0]
+    assert model["health"]["state"] == "unchecked"
+    assert model["health"]["label"] == "未检测"
+
+    card = {c["key"]: c for c in client.get("/api/platforms").json()["platforms"]}["douyin"]
+    assert card["cookie_configured"] is False
+    assert card["health"]["state"] == "unset"
+
+
+def test_credentials_check_unconfigured_platform(tmp_path, monkeypatch):
+    _isolate_platform_profiles(tmp_path, monkeypatch)
+    client, _ = _client(tmp_path)
+
+    body = client.post(
+        "/api/credentials/check", json={"kind": "platform", "name": "douyin"}
+    ).json()
+    assert body["result"]["status"] == "unset"
+    assert body["result"]["detail"] == "未配置登录态"
+    assert body["stored"] is False
+
+
+def test_credentials_check_unknown_kind_is_rejected(tmp_path):
+    client, _ = _client(tmp_path)
+    resp = client.post("/api/credentials/check", json={"kind": "cookie", "name": "douyin"})
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "INPUT_UNSUPPORTED_URL"
+
+
+def test_credentials_check_local_platform_writes_back(tmp_path, monkeypatch):
+    _isolate_platform_profiles(tmp_path, monkeypatch)
+    client, _ = _client(tmp_path)
+    saved = client.post("/api/cookies/douyin", json={"cookie": "sessionid=abc; ttwid=dev"})
+    assert saved.json()["ok"] is True
+
+    body = client.post(
+        "/api/credentials/check", json={"kind": "platform", "name": "douyin"}
+    ).json()
+    assert body["result"]["status"] == "active"
+    assert body["result"]["label"] == "正常"
+    assert body["result"]["source"] == "local"
+    assert body["stored"] is True
+
+    card = _health_cards(client)["douyin"]
+    assert card["configured"] is True
+    assert card["health"]["state"] == "active"
+    assert card["health"]["checked_at"]
+
+
+def test_credentials_check_expired_local_platform(tmp_path, monkeypatch):
+    _isolate_platform_profiles(tmp_path, monkeypatch)
+    client, _ = _client(tmp_path)
+    saved = client.post("/api/cookies/douyin", json={"cookie": "ttwid=dev; msToken=m"})
+    assert saved.json()["ok"] is True
+
+    body = client.post(
+        "/api/credentials/check", json={"kind": "platform", "name": "douyin"}
+    ).json()
+    assert body["result"]["status"] == "expired"
+    assert "sessionid" in body["result"]["detail"]
+
+    card = _health_cards(client)["douyin"]
+    assert card["health"]["state"] == "expired"
+    assert "sessionid" in card["health"]["detail"]
+
+
+def test_credentials_check_records_probe_failure(tmp_path, monkeypatch):
+    from zhiji.health import PLATFORM_PROBES
+
+    _isolate_platform_profiles(tmp_path, monkeypatch)
+    client, _ = _client(tmp_path)
+    saved = client.post("/api/cookies/bilibili", json={"cookie": "SESSDATA=abc"})
+    assert saved.json()["ok"] is True
+
+    def boom(profile, *, opener=None):
+        raise RuntimeError("network down")
+
+    monkeypatch.setitem(PLATFORM_PROBES, "bilibili", boom)
+    body = client.post(
+        "/api/credentials/check", json={"kind": "platform", "name": "bilibili"}
+    ).json()
+    assert body["result"]["status"] == "error"
+    assert body["result"]["detail"] == "探测异常：RuntimeError"
+    assert body["stored"] is True
+
+    card = _health_cards(client)["bilibili"]
+    assert card["health"]["state"] == "error"
+    assert "RuntimeError" in card["health"]["detail"]
+
+
+def test_credentials_check_llm_unconfigured(tmp_path, monkeypatch):
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    client, _ = _client(tmp_path)
+    client.post("/api/models", json={"name": "DeepSeek", "model": "deepseek-chat"})
+
+    body = client.post(
+        "/api/credentials/check", json={"kind": "llm", "name": "DeepSeek"}
+    ).json()
+    assert body["result"]["status"] == "unset"
+    assert body["result"]["detail"] == "未配置 Key"
+    assert body["stored"] is False
+
+
+def test_credentials_check_llm_ok_updates_model_health(tmp_path, monkeypatch):
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    client, _ = _client(tmp_path)
+    client.post(
+        "/api/models",
+        json={"name": "DeepSeek", "model": "deepseek-chat", "api_key": "sk-test"},
+    )
+    monkeypatch.setattr(LLMClient, "test_connection", lambda self: "OK")
+
+    body = client.post(
+        "/api/credentials/check", json={"kind": "llm", "name": "DeepSeek"}
+    ).json()
+    assert body["result"]["status"] == "active"
+    assert body["result"]["detail"] == "连通正常"
+    assert body["stored"] is True
+
+    model = {m["name"]: m for m in client.get("/api/models").json()["models"]}["DeepSeek"]
+    assert model["health"]["state"] == "active"
+    assert model["health"]["checked_at"]
+
+
+def test_frontend_credentials_health_ui(tmp_path):
+    """阶段 4.4：前端健康面板引用了新接口与样式。"""
+
+    client, _ = _client(tmp_path)
+
+    js = client.get("/static/app.js").text
+    assert "/api/credentials/health" in js
+    assert "/api/credentials/check" in js
+    assert "checkCredential" in js
+    assert "凭据健康状态" in js
+    assert "本地校验，未联网" in js
+
+    css = client.get("/static/app.css").text
+    assert ".health-line" in css

@@ -360,13 +360,22 @@ function showHome() {
   $('sidebar').classList.remove('open');
 }
 
+function healthWarn(p) {
+  const st = (p.health && p.health.state) || '';
+  if (st === 'expired') return '<div class="cookie-warn">登录态已失效，请到「设置 → Cookie」重新保存</div>';
+  if (st === 'error') return '<div class="cookie-warn">上次凭据检测异常，可到「设置 → Cookie」重新检测</div>';
+  if (p.key === 'douyin' && p.cookie_configured === false) {
+    return '<div class="cookie-warn">未配置 Cookie，可能抓取失败（设置 → Cookie）</div>';
+  }
+  return '';
+}
+
 function renderHome() {
   const wrap = $('wrap');
   const cards = state.platforms.map((p) => {
     const disabled = !p.enabled;
     const active = state.platform === p.key;
-    const cookieWarn = (p.key === 'douyin' && p.cookie_configured === false)
-      ? '<div class="cookie-warn">未配置 Cookie，可能抓取失败（设置 → Cookie）</div>' : '';
+    const cookieWarn = healthWarn(p);
     return '<button class="platform-card' + (active ? ' active' : '') + (disabled ? ' disabled' : '') +
       '" data-platform="' + p.key + '" type="button"' + (disabled ? ' disabled' : '') + '>' +
       '<div class="platform-name">' + escapeHtml(p.name) + '</div>' +
@@ -1050,6 +1059,48 @@ function renderSettings() {
   refreshIcons();
 }
 
+/* ================= 凭据健康状态（阶段 4.4） ================= */
+
+function formatCheckedAt(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString('zh-CN', { hour12: false });
+}
+
+function healthStateClass(state) {
+  if (state === 'active') return 'ok';
+  if (state === 'expired') return 'bad';
+  if (state === 'error') return 'warn';
+  return '';
+}
+
+function healthLine(health, probe) {
+  if (!health) return '';
+  const bits = [health.label || '未知状态'];
+  if (health.checked_at) bits.push('上次检测：' + formatCheckedAt(health.checked_at));
+  if (health.detail) bits.push(health.detail);
+  const suffix = (probe === 'local' && health.checked_at) ? '（本地校验，未联网）' : '';
+  return '<div class="health-line ' + healthStateClass(health.state) + '">' +
+    escapeHtml(bits.join(' ｜ ')) + suffix + '</div>';
+}
+
+async function checkCredential(kind, name) {
+  toast('正在检测…');
+  try {
+    const data = await api('/api/credentials/check', {
+      method: 'POST',
+      body: JSON.stringify({ kind, name })
+    });
+    const result = data.result || {};
+    toast((result.label || '检测完成') + (result.detail ? '：' + result.detail : ''));
+    if (kind === 'llm') await loadModels();
+    renderSettings();
+  } catch (err) {
+    toast(err.message || '检测失败');
+  }
+}
+
 function renderModelPanel(body) {
   const rows = state.models.map((m) =>
     '<div class="model-row">' +
@@ -1058,9 +1109,10 @@ function renderModelPanel(body) {
     (m.enabled ? '' : '<span class="badge" style="background:var(--surface-2);color:var(--muted)">停用</span>') +
     '</div>' +
     '<div class="model-row-meta">' + escapeHtml(m.model) + ' ｜ ' + escapeHtml(m.base_url) + ' ｜ Key: ' + escapeHtml(m.api_key || '未设置') + '</div>' +
+    healthLine(m.health, 'remote') +
     '<div class="model-row-actions">' +
     '<button class="btn small" onclick="editModel(\'' + escapeHtml(m.name) + '\')" type="button">编辑</button>' +
-    '<button class="btn small" onclick="testModel(\'' + escapeHtml(m.name) + '\')" type="button">测试</button>' +
+    '<button class="btn small" onclick="checkCredential(\'llm\', \'' + escapeHtml(m.name) + '\')" type="button">检测</button>' +
     (m.default ? '' : '<button class="btn small" onclick="setDefault(\'' + escapeHtml(m.name) + '\')" type="button">设为默认</button>') +
     '<button class="btn small danger" onclick="removeModel(\'' + escapeHtml(m.name) + '\')" type="button">删除</button>' +
     '</div></div>').join('');
@@ -1126,14 +1178,6 @@ async function saveModel() {
 function editModel(name) {
   state.editingModelName = name;
   renderSettings();
-}
-
-async function testModel(name) {
-  toast('正在测试连通性');
-  try {
-    await api('/api/models/' + encodeURIComponent(name) + '/test', { method: 'POST' });
-    toast('连通正常');
-  } catch (err) { toast(err.message); }
 }
 
 async function setDefault(name) {
@@ -1206,16 +1250,28 @@ const COOKIE_PLATFORMS = [
 
 async function renderCookiesPanel(body) {
   body.innerHTML = '<div class="search-empty">加载中…</div>';
+  const health = {};
+  try {
+    const data = await api('/api/credentials/health');
+    (data.platforms || []).forEach((item) => { health[item.key] = item; });
+  } catch (e) { /* 健康状态拿不到不影响 Cookie 管理 */ }
   const parts = [];
   for (const p of COOKIE_PLATFORMS) {
     let inner = '';
+    const info = health[p.key] || null;
+    const status = healthLine(info && info.health, info && info.probe);
     try {
       const data = await api('/api/cookies/' + p.key);
       if (data.configured) {
         inner = '<div class="check-line" style="color:var(--accent);margin:0 0 8px">已配置（' + data.cookie_length + ' 字节）</div>' +
-          '<button class="btn small" id="btn-' + p.key + '-cookie-delete" type="button">清除 Cookie</button>';
+          status +
+          '<div class="model-row-actions">' +
+          '<button class="btn small" id="btn-' + p.key + '-cookie-check" type="button">检测登录态</button>' +
+          '<button class="btn small" id="btn-' + p.key + '-cookie-delete" type="button">清除 Cookie</button>' +
+          '</div>';
       } else {
-        inner = '<div class="form-field" style="margin-bottom:8px">' +
+        inner = status +
+          '<div class="form-field" style="margin-bottom:8px">' +
           '<textarea id="s-' + p.key + '-cookie" rows="3" placeholder="' + p.placeholder + '"></textarea></div>' +
           '<button class="btn small" id="btn-' + p.key + '-cookie-save" type="button">保存 Cookie</button>';
       }
@@ -1243,6 +1299,10 @@ async function renderCookiesPanel(body) {
   body.innerHTML = parts.join('');
 
   for (const p of COOKIE_PLATFORMS) {
+    const btnCheck = $('btn-' + p.key + '-cookie-check');
+    if (btnCheck) {
+      btnCheck.addEventListener('click', () => checkCredential('platform', p.key));
+    }
     const btnSave = $('btn-' + p.key + '-cookie-save');
     if (btnSave) {
       btnSave.addEventListener('click', async () => {
