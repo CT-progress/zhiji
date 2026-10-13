@@ -38,3 +38,40 @@ jobs:
 
       - name: Test (pytest)
         run: pytest -p no:cacheprovider
+
+  # 阶段 5：容器化。真实跑一遍 docker build，并验证容器能启动、健康检查可达、
+  # 进程不是 root —— 这些是本机（无 Docker）无法覆盖的部分。
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t zhiji:ci .
+
+      - name: Image runs as non-root (uid 10001)
+        run: |
+          uid="$(docker run --rm zhiji:ci id -u)"
+          echo "container uid = $uid"
+          test "$uid" = "10001"
+
+      - name: Start container
+        run: docker run -d --name zhiji-ci -p 8000:8000 zhiji:ci
+
+      - name: Wait for /api/health
+        run: |
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/api/health; then
+              echo "健康检查通过"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "健康检查超时" >&2
+          docker logs zhiji-ci
+          exit 1
+
+      - name: Container logs on failure
+        if: failure()
+        run: docker logs zhiji-ci || true

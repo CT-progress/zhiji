@@ -1,0 +1,40 @@
+# docker build 上下文排除清单：本机状态、密钥、缓存与开发产物都不进镜像。
+
+# 版本控制与本地环境
+.git
+.gitignore
+.venv
+venv
+__pycache__/
+*.py[cod]
+
+# 本机状态与密钥（绝不进镜像）
+.env
+.env.*
+data/
+config/
+output/
+.tmp/
+tmp/
+.cache/
+.backup/
+models/
+ms-playwright/
+.master_key
+
+# 测试与开发缓存
+tests/
+.pytest-tmp*/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.log
+
+# 构建产物
+build/
+dist/
+*.egg-info/
+
+# 与运行无关的仓库文件
+docs/
+.github/

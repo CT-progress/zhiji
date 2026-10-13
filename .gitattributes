@@ -1,0 +1,4 @@
+# 仓库内统一 LF；容器脚本必须为 LF，否则 shebang 失效
+* text=auto
+*.sh text eol=lf
+Dockerfile text eol=lf

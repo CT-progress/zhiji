@@ -1,0 +1,132 @@
+"""容器化打包文件的不变量测试（阶段 5.1）。
+
+这些用例不打 Docker（CI 的 docker job 才做真实构建），只守住几条容易被无意破
+坏的硬约束：
+
+* 入口脚本是 POSIX sh、以 LF 结尾、默认要求登录、能透传显式命令；
+* 入口脚本硬编码的 CLI 选项必须真实存在（跨文件契约）；
+* Dockerfile 以非 root 运行、内置 Playwright、带健康检查、可写状态走卷；
+* ``.dockerignore`` 必须挡住本机状态与密钥，避免被 `docker build` 烤进镜像。
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import yaml
+from typer.testing import CliRunner
+
+from zhiji.cli import app as cli_app
+
+ROOT = Path(__file__).resolve().parents[1]
+DOCKERFILE = ROOT / "Dockerfile"
+DOCKERIGNORE = ROOT / ".dockerignore"
+ENTRYPOINT = ROOT / "docker" / "entrypoint.sh"
+
+
+def _dockerfile() -> str:
+    return DOCKERFILE.read_text(encoding="utf-8")
+
+
+def _entrypoint() -> str:
+    return ENTRYPOINT.read_text(encoding="utf-8")
+
+
+def test_docker_assets_exist() -> None:
+    assert DOCKERFILE.is_file()
+    assert DOCKERIGNORE.is_file()
+    assert ENTRYPOINT.is_file()
+
+
+def test_entrypoint_is_posix_shell_with_lf_endings() -> None:
+    raw = ENTRYPOINT.read_bytes()
+    # Windows 检出会带 CRLF，容器里执行会变成 “bad interpreter”，所以这里必须守住 LF。
+    assert b"\r" not in raw
+    text = raw.decode("utf-8")
+    assert text.startswith("#!/bin/sh\n")
+    assert "set -eu" in text
+
+
+def test_entrypoint_forwards_explicit_command() -> None:
+    text = _entrypoint()
+    # 显式传命令（如 python -m zhiji migrate）时必须原样执行，不拼默认参数。
+    assert 'if [ "$#" -gt 0 ]; then' in text
+    assert 'exec "$@"' in text
+
+
+def test_entrypoint_defaults_to_require_auth_and_honours_env() -> None:
+    text = _entrypoint()
+    assert '"${ZHIJI_REQUIRE_AUTH:-1}"' in text
+    assert 'set -- "$@" --require-auth' in text
+    assert 'HOST="${ZHIJI_HOST:-0.0.0.0}"' in text
+    assert 'PORT="${ZHIJI_PORT:-8000}"' in text
+    assert 'ZHIJI_TOKEN' in text
+    assert text.rstrip().endswith('exec python -m zhiji "$@"')
+
+
+def test_entrypoint_flags_exist_in_cli() -> None:
+    """入口脚本拼的参数名必须和 CLI 真实选项一致。"""
+
+    result = CliRunner().invoke(cli_app, ["web", "--help"])
+    assert result.exit_code == 0
+    for flag in ("--host", "--port", "--token", "--require-auth"):
+        assert flag in result.output
+
+
+def test_dockerfile_runs_as_non_root() -> None:
+    text = _dockerfile()
+    assert "USER zhiji" in text
+    assert "uid 10001" in text
+    # 结尾不能再切回 root，否则容器里跑的就是 root 进程。
+    assert text.rstrip().splitlines()[-1].strip() == 'ENTRYPOINT ["/usr/local/bin/zhiji-entrypoint"]'
+
+
+def test_dockerfile_installs_playwright_and_healthcheck() -> None:
+    text = _dockerfile()
+    assert "playwright install --with-deps chromium" in text
+    assert "HEALTHCHECK" in text
+    assert "/api/health" in text
+    # 健康检查打的是真实存在的路由。
+    assert '"/api/health"' in (ROOT / "src" / "zhiji" / "web" / "app.py").read_text("utf-8")
+
+
+def test_dockerfile_keeps_state_on_volumes() -> None:
+    text = _dockerfile()
+    for mount in ("/app/data", "/app/config", "/app/output", "/app/.tmp"):
+        assert mount in text
+    assert "VOLUME" in text
+    assert "EXPOSE 8000" in text
+
+
+def test_dockerfile_does_not_bake_secrets() -> None:
+    text = _dockerfile()
+    # 不能把整个工作目录 COPY 进来，也不能复制本机状态与密钥。
+    assert "COPY . ." not in text
+    for forbidden in ("COPY .env", "COPY data", "COPY config", "COPY .tmp", "ZHIJI_MASTER_KEY"):
+        assert forbidden not in text
+    # 运行期状态目录只能是镜像里新建的空目录 + 卷挂载。
+    assert "mkdir -p /app/data /app/config /app/output /app/.tmp" in text
+
+
+def test_dockerignore_blocks_local_state_and_secrets() -> None:
+    patterns = {
+        line.strip()
+        for line in DOCKERIGNORE.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    }
+    for expected in ("data/", "config/", "output/", ".env", ".env.*", ".master_key", ".venv"):
+        assert expected in patterns, f".dockerignore 缺少 {expected}"
+    assert patterns.isdisjoint({"src/", "pyproject.toml", "README.md"})
+
+def test_ci_builds_and_probes_the_container() -> None:
+    """本机没有 Docker CLI，CI 的 docker job 是唯一的真实构建验证点。"""
+
+    workflow = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    )
+    job = workflow["jobs"]["docker"]
+    assert job["runs-on"] == "ubuntu-latest"
+    script = "\n".join(step.get("run", "") for step in job["steps"])
+    assert "docker build -t zhiji:ci ." in script
+    assert "/api/health" in script
+    assert 'test "$uid" = "10001"' in script

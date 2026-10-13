@@ -178,7 +178,7 @@
 | ✅ **4.1 加密模块** | `cryptography` 实现 AES-256-GCM；主密钥来自环境变量 / 本机密钥文件 | 加解密与防篡改有测试；主密钥不入库、不入 Git |
 | ✅ **4.2 LLM Key 入库** | `config/zhiji.json` 中的 Key 迁入 `llm_credential` 表（密文） | Key 明文只在写入瞬间出现；界面只显示掩码 |
 | ✅ **4.3 Cookie 入库** | `data/*-profile.json` 迁入 `platform_credentials` 表（整份登录态密文） | 迁移后删除明文文件；抓取功能不回退 |
-| **4.4 凭据健康检查** | 提供"检测凭据是否有效"接口；记录检测时间与结果 | 界面可手动触发检测并看到结果 |
+| ✅ **4.4 凭据健康检查** | 提供"检测凭据是否有效"接口；记录检测时间与结果 | 界面可手动触发检测并看到结果 |
 
 **决策**：使用 `cryptography` 的 AES-GCM + 环境主密钥（MVP 够用）；上云后换 KMS/Vault，接口不变。
 
@@ -233,6 +233,32 @@ AAD 绑定、用户作用域隔离、更新不丢 Key、删除模型连带删凭
 「库文件与旁文件均无明文 Cookie」、默认走库 / 显式 `path` 走文件、旧明文文件自动导入并删除、删除行为、
 迁移幂等与 `--dry-run` 不写不删；本机 `data/` 已无明文 `*-profile.json`（4 个平台均无待迁移文件）。
 
+**4.4 落地细节**
+
+- 新增 `src/zhiji/health.py`：统一「一次探测」的模型（`CheckResult` / `ProbeOutcome`），状态取值与
+  凭据表 `status` 列一致（`active` / `expired` / `error` / `unset`），另加只在界面出现的
+  `unchecked`（已配置但没检测过）；
+- **远程探测**：B 站 `x/web-interface/nav`（读 `data.isLogin`）与知乎 `/api/v4/me`（200 + `id`），
+  带 Cookie 与 UA 发一次只读请求；HTTP 客户端以 `opener` 参数注入，测试传假实现即可，不必联网；
+- **本地校验**：抖音 / 小红书的接口需要 `a_bogus` / `x-s` 签名，联网探测既不稳定也不礼貌，因此只检查
+  关键会话 Cookie（`sessionid` / `web_session`）是否还在，并在 `source` 里如实标注，界面提示「未联网校验」；
+- **零泄露**：失败摘要由本模块自己拼（HTTP 状态码、缺失的 Cookie 字段名、异常类名），或经
+  `sanitize_reason` 抹掉 `Bearer …` / `sk-…` / `api_key=…` 之类片段后截断，任何情况下都不写入
+  Cookie 或 Key 片段；
+- 凭据表新增 `last_checked_at` / `last_error` 两列（启动时按需 `ALTER TABLE` 补列，兼容旧库）；
+  两个仓储各加 `record_check(...)`（**只更新已存在的行，绝不新建**）与 `statuses(...)`（纯读库不发请求）；
+- Web 端：`GET /api/credentials/health` 返回平台与模型的配置 / 健康总览，`POST /api/credentials/check`
+  手动触发一次检测（body `{"kind": "platform"|"llm", "name": ...}`）并把结果写回；`/api/models` 与
+  `/api/platforms` 的每个卡片也带上 `health` 字段；未配置的 Key 直接返回「未配置」而**不发请求**；
+- 前端在「凭据」面板显示状态、检测时间与失败原因并提供「检测」按钮，模型卡片同理；
+- 全程**不引入后台轮询 / 定时任务**，探测失败只落一行摘要，绝不影响抓取主流程。
+
+**4.4 验收**：`tests/test_health.py`（新增 23 项）覆盖 B 站 / 知乎的 HTTP 错误、非 JSON、业务码、
+`isLogin=false` 与风控错误码、抖音 / 小红书的本地结构校验、未知平台报错、探测异常兜底、摘要脱敏与截断；
+`tests/test_credentials.py` / `tests/test_platform_credentials.py` 各新增 6 / 4 项，覆盖 `record_check`
+只更新不新建、`active` 清空失败原因、超长摘要截断、作用域隔离；`tests/test_web.py` 新增 11 项，
+覆盖总览结构、未配置 / 本地校验 / 探测异常 / 未配置 Key 四条检测路径与 `health` 字段下发。
+
 ---
 
 ### 阶段 5：容器化部署
@@ -241,10 +267,43 @@ AAD 绑定、用户作用域隔离、更新不丢 Key、删除模型连带删凭
 
 | 迭代 | 内容 | 验收标准 |
 | --- | --- | --- |
-| **5.1 镜像构建** | 多阶段 Dockerfile；含 Playwright 依赖；非 root 运行 | `docker build` 成功，镜像可启动 |
+| 🔶 **5.1 镜像构建** | 多阶段 Dockerfile；含 Playwright 依赖；非 root 运行 | 已实现：本机无 Docker，真实 `docker build` 交给 CI 的 docker job |
 | **5.2 Compose 编排** | `docker-compose.yml`：应用 + 数据卷 + 健康检查；可选 PostgreSQL | `docker compose up` 后 Web 可访问 |
 | **5.3 反向代理与配置** | Nginx/Caddy + HTTPS 说明；环境变量清单 | 文档可照做启动 |
 | **5.4 部署文档** | 安装、升级、备份、常见问题 | 新人可按文档独立部署 |
+
+**5.1 落地细节**
+
+- 新增根目录 `Dockerfile`（多阶段构建）：
+  - **builder**：`python:3.12-slim-bookworm`，装 `build-essential` 只是兜底（默认依赖都有
+    manylinux wheel），建 `/opt/venv`，用 **editable 安装**（`pip install -e .`）把包装到
+    `/app/src`；这样 `PROJECT_ROOT` 仍是 `/app`，`data/` `config/` `output/` `.tmp/` 都落在
+    卷挂载点上，而不是散进 `site-packages`；
+  - **runtime**：同版本 slim 基础镜像，只拷 `/opt/venv` 与源码；装 `ffmpeg`（yt-dlp 抽音轨），
+    并用 `playwright install --with-deps chromium` 把浏览器与系统库内置进镜像，浏览器固定在
+    `/ms-playwright`，非 root 启动 Chromium 前给沙箱助手补 setuid 位；
+  - **非 root 运行**：新增 `zhiji` 用户（uid/gid 10001），`USER zhiji` 之后不再有 root 步骤；
+  - **状态外置**：`data/`（数据库 + `.master_key`）、`config/`、`output/`、`.tmp/` 声明为 `VOLUME`，
+    镜像里只留空目录；`.dockerignore` 挡住 `.env`、`data/`、`config/`、`.master_key`、各类缓存
+    与测试目录，密钥不会被 `docker build` 烤进镜像；
+  - **自带健康检查**：`HEALTHCHECK` 用容器内 Python 请求 `http://127.0.0.1:$ZHIJI_PORT/api/health`
+    （该接口在鉴权模式下公开），不依赖镜像里有没有 `curl`；
+  - 可选 `--build-arg ZHIJI_WITH_ASR=1` 才装 `faster-whisper`，默认镜像不含语音转写依赖。
+- 新增 `docker/entrypoint.sh`：默认按 `ZHIJI_HOST` / `ZHIJI_PORT`（0.0.0.0:8000）前台起 Web，
+  并**默认追加 `--require-auth`**（容器绑的是 0.0.0.0，裸奔不可接受）；`ZHIJI_TOKEN` 可切回共享令牌，
+  `ZHIJI_REQUIRE_AUTH=0` 才关闭（由 `zhiji web` 自身的安全检查兜底）；显式传命令时原样执行，
+  例如 `docker run --rm -v zhiji-data:/app/data zhiji python -m zhiji migrate --migrate-keys`；
+  用 `exec` 启动，SIGTERM 直达 uvicorn，`docker stop` 能优雅退出。
+- `.github/workflows/ci.yml` 新增 `docker` job：`docker build` → 检查容器内 `id -u` 是否为 10001
+  （非 root）→ 起容器轮询 `/api/health` 直到 200 → 失败时打印容器日志。
+
+**5.1 验收**：本机没有 Docker CLI（只剩 `com.docker.service` 残留），因此 `docker build` 未能在本机实跑，
+真实构建 / 启动 / 健康检查放到 CI 的 `docker` job（push 后自动执行）。本机可验证的部分已全部通过：
+`tests/test_packaging.py`（新增 11 项）守住入口脚本是 POSIX sh + LF、默认要求登录、显式命令透传、
+入口脚本拼的 CLI 选项与 `zhiji web` 真实选项一致、Dockerfile 非 root + Playwright + 健康检查 + 卷挂载 +
+不烤密钥、`.dockerignore` 挡住本机状态与密钥；`pytest` / `ruff` / `mypy` / `node --check` 全绿。
+手动验证命令：构建 `docker build -t zhiji:5.1 .`，
+运行 `docker run --rm -p 8000:8000 -v zhiji-data:/app/data -v zhiji-config:/app/config zhiji:5.1`。
 
 ---
 
@@ -304,28 +363,26 @@ AAD 绑定、用户作用域隔离、更新不丢 Key、删除模型连带删凭
 
 ## 9. 下一步
 
-**进入阶段 4 · 迭代 4.4：凭据健康检查**
+**进入阶段 5 · 迭代 5.2：Compose 编排**
 
-阶段 4 · 4.1、4.2、4.3 已完成：
+5.1 已经把「本机 start.bat」换成可构建的镜像：
 
-- 4.1：AES-256-GCM 加密模块 + 主密钥解析落盘（默认 `data/.master_key`，已 gitignore）；
-  换密钥、篡改密文、AAD 不符、格式损坏一律解密失败，绝不返回错误明文；
-- 4.2：LLM Key 全部加密进 `llm_credentials` 表，`model_configs.api_key` 与 `config/zhiji.json` 不再留明文，
-  界面与日志只显示 `前4****后4` 掩码；历史明文用 `python -m zhiji.migrate --migrate-keys` 一次性迁移
-  （幂等、可 `--dry-run`），迁移后 `VACUUM` 重建库文件，抹掉 SQLite 空闲页里的旧明文残影；
-- 4.3：平台登录态整份加密进 `platform_credentials` 表，磁盘上不再有明文 `*-profile.json`；
-  保存即入库、读取时自动把旧明文文件加密入库并删除，删除接口同时清理库行与残留文件；
-  历史明文用 `python -m zhiji.migrate --migrate-cookies` 一次性迁移（幂等、可 `--dry-run`）。
+- 根目录 `Dockerfile`（多阶段 + 非 root uid 10001 + 内置 Playwright/Chromium 与 ffmpeg），
+  以 editable 方式装到 `/app/src`，保证 `data/` `config/` `output/` `.tmp/` 都落在卷挂载点；
+- `docker/entrypoint.sh` 默认 0.0.0.0:8000 起 Web 且默认要求登录，显式传命令时透传
+  （迁移、体检等一次性任务直接 `docker run ... python -m zhiji ...`）；
+- `.dockerignore` 挡住 `.env` / `data/` / `config/` / `.master_key`，密钥不进镜像层；
+- CI 增加 `docker` job 做真实构建 + 启动 + `/api/health` 探测 + 非 root 断言。
 
-4.4 要做的具体内容：
+5.2 要做的具体内容：
 
-1. 新增「凭据健康检查」能力：对已配置的平台登录态与 LLM Key 做一次轻量探测（如带 Cookie 请求一个只读接口）；
-2. 探测结果写回凭据行（`status` / `last_checked_at` / 失败原因摘要），失败原因不包含任何 Cookie 或 Key 片段；
-3. Web 端提供手动触发入口与结果展示（例如「检测」按钮 + 「上次检测：2026-10-13 14:30 正常 / 已失效」）；
-4. 不引入任何后台轮询，避免频繁请求第三方接口触发风控。
+1. `docker-compose.yml`：应用服务 + 具名数据卷（数据库、配置、输出）+ 健康检查依赖；
+2. 环境变量清单（主密钥、鉴权开关、数据库连接串、端口）集中到 `.env` 示例并在文档里说明；
+3. 可选 PostgreSQL 档：改 `ZHIJI_DATABASE_URL` 即可切换，代码无需改动；
+4. `docker compose up` 后 Web 可访问、数据在卷里持久化，重启不丢。
 
-**验收**：能手动触发检测并看到「正常 / 已失效 / 未配置」三态；检测失败不影响抓取主流程；
-`pytest` / `ruff` / `mypy` / `node --check` 全绿。
+**验收**：`docker compose config` 无告警；`docker compose up -d` 后 `/api/health` 返回 200；
+容器重启后数据仍在；`pytest` / `ruff` / `mypy` / `node --check` 全绿。
 
 ### 迭代记录
 
@@ -345,3 +402,5 @@ AAD 绑定、用户作用域隔离、更新不丢 Key、删除模型连带删凭
 | 4.1 加密模块 | ✅ 完成 | 267 passed / ruff 全绿 / mypy 44 files；加解密、随机 nonce、篡改、错密钥、AAD 绑定、密钥解析顺序与落盘全覆盖；主密钥不入库、不进 Git |
 | 4.2 LLM Key 入库 | ✅ 完成 | 285 passed / ruff 全绿 / mypy 45 files / `node --check` 通过；Key 明文不再落库、JSON 导出与界面只给掩码、迁移幂等且 `VACUUM` 后库文件无明文残影；真实库迁移后仍可解密读回 3 个 Key |
 | 4.3 Cookie 入库 | ✅ 完成 | 311 passed（新增 26 项）/ ruff 全绿 / mypy 46 files / `node --check` 通过；登录态整份密文入库、界面只给「N 项」零泄露提示、AAD 绑定平台与作用域、默认走库而显式 `path` 仍走文件、旧明文文件自动导入并删除、迁移幂等且可 `--dry-run`；本机 `data/` 已无明文 `*-profile.json`（无待迁移文件），真实库 `platform_credentials` 为空表，库文件与旁文件均无明文 Cookie 残影 |
+| 4.4 凭据健康检查 | ✅ 完成 | 355 passed（新增 44 项）/ ruff 全绿 / mypy 47 files / `node --check` 通过；B 站 / 知乎带 Cookie 发一次只读身份请求、抖音 / 小红书只做本地关键 Cookie 校验并标注「未联网校验」，结果写回凭据行且失败摘要脱敏截断（绝不含 Cookie / Key 片段），未配置的 Key 不发请求，无任何后台轮询；`/api/credentials/health` 只读总览、`/api/credentials/check` 手动触发并写回、`/api/models` 与 `/api/platforms` 下发 `health` 字段 |
+| 5.1 镜像构建 | 🔶 已实现，待真实构建验证 | 新增 `tests/test_packaging.py` 11 项守住入口脚本与 Dockerfile 不变量 / ruff 全绿 / mypy 47 files / `node --check` 通过；本机无 Docker CLI，`docker build` + 容器启动 + `/api/health` 由新增的 CI docker job 覆盖 |
