@@ -6,6 +6,8 @@
     python -m zhiji.migrate --dry-run            # 只统计，不写入
     python -m zhiji.migrate --json other.json --database sqlite:///data/zhiji.db
     python -m zhiji.migrate --config config/zhiji.json   # 只导入模型/设置
+    python -m zhiji.migrate --migrate-keys       # 明文 LLM Key 加密入库
+    python -m zhiji.migrate --migrate-cookies    # 明文登录态加密入库并删除明文文件
 
 迁移是幂等的：已经存在的会话 id 会被跳过，源文件保持不动。
 """
@@ -14,8 +16,9 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import func, select, update
 
@@ -24,11 +27,18 @@ from zhiji.chat import DATA_DIR, Conversation, conversation_to_row
 from zhiji.config import default_config_path, read_config_file
 from zhiji.errors import ZhijiError
 from zhiji.models import AppConfig
+from zhiji.platforms import (
+    bilibili_cookies,
+    douyin_cookies,
+    xiaohongshu_cookies,
+    zhihu_cookies,
+)
 from zhiji.storage import (
     ConfigRepository,
     ConversationRow,
     Database,
     ModelConfigRow,
+    PlatformCredentialRepository,
     TaskRow,
     UserRepository,
     get_database,
@@ -211,6 +221,84 @@ def migrate_llm_keys(
     )
 
 
+#: 旧版明文登录态文件：平台标识 -> (中文名, 平台模块)。
+#: 这里存模块而不是路径，取路径时再读模块属性，测试替换默认路径也能生效。
+LEGACY_COOKIE_SOURCES: tuple[tuple[str, str, Any], ...] = (
+    ("douyin", "抖音", douyin_cookies),
+    ("bilibili", "B 站", bilibili_cookies),
+    ("zhihu", "知乎", zhihu_cookies),
+    ("xiaohongshu", "小红书", xiaohongshu_cookies),
+)
+
+
+@dataclass(frozen=True)
+class CookieImportResult:
+    """一次「明文登录态文件 -> 加密凭据表」迁移的统计。"""
+
+    migrated: int
+    missing: int
+    invalid: int
+    details: tuple[tuple[str, str], ...] = ()
+    dry_run: bool = False
+
+
+def migrate_platform_cookies(
+    database: Database, *, dry_run: bool = False
+) -> CookieImportResult:
+    """把 ``data/*-profile.json`` 里的明文登录态加密迁入 ``platform_credentials``。
+
+    每个平台只认自己的默认路径；文件不存在记 ``missing``，读不出来（损坏或不含
+    关键字段）记 ``invalid`` 并**保留原文件**方便人工检查，成功入库后删除明文文件。
+    整个迁移只看得到掩码（如 ``6 项``），不打印也不返回任何 Cookie 内容。
+    幂等：第二次运行时明文文件已经不在了，不会重复写入。
+    """
+
+    database.create_all()
+    repository = PlatformCredentialRepository(database)
+    migrated = 0
+    missing = 0
+    invalid = 0
+    details: list[tuple[str, str]] = []
+    for platform, label, module in LEGACY_COOKIE_SOURCES:
+        target = Path(module.DEFAULT_PROFILE_PATH)
+        if not target.exists():
+            missing += 1
+            details.append((label, "无明文文件"))
+            continue
+        # 显式传路径 -> 走文件模式：按该平台白名单精简并校验关键字段。
+        profile = module.load_profile(target)
+        if profile is None:
+            invalid += 1
+            details.append((label, "文件无法解析，已保留"))
+            continue
+        migrated += 1
+        if dry_run:
+            details.append((label, "将加密入库并删除明文文件"))
+            continue
+        repository.save(platform, asdict(profile))
+        _remove_plaintext_profile(target)
+        details.append((label, "已加密入库，明文文件已删除"))
+    if not dry_run and migrated:
+        # 与 LLM Key 迁移同理：删除文件后把库重建一遍，避免空闲页残留旧内容。
+        _vacuum_sqlite(database)
+    return CookieImportResult(
+        migrated=migrated,
+        missing=missing,
+        invalid=invalid,
+        details=tuple(details),
+        dry_run=dry_run,
+    )
+
+
+def _remove_plaintext_profile(target: Path) -> None:
+    """删掉迁移完成的明文登录态文件；删不掉也不影响迁移结果。"""
+
+    try:
+        target.unlink()
+    except OSError:
+        pass
+
+
 def _vacuum_sqlite(database: Database) -> None:
     """重建 SQLite 库文件，清除删除 / 更新后残留在空闲页里的旧数据。"""
 
@@ -296,6 +384,11 @@ def main(argv: list[str] | None = None) -> int:
         help="把配置文件 / 数据库里的明文 LLM Key 加密迁入凭据表并清空明文",
     )
     parser.add_argument(
+        "--migrate-cookies",
+        action="store_true",
+        help="把 data/*-profile.json 里的明文登录态加密迁入凭据表并删除明文文件",
+    )
+    parser.add_argument(
         "--assign-user",
         dest="assign_user",
         default=None,
@@ -313,6 +406,18 @@ def main(argv: list[str] | None = None) -> int:
             f"已在库中 {key_result.already_stored} 个；"
             f"清空数据库明文列 {key_result.cleared_rows} 处，"
             f"配置文件{'将清空' if key_result.dry_run and key_result.json_cleared else ('已清空' if key_result.json_cleared else '无需清空')}"
+        )
+        return 0
+
+    if args.migrate_cookies:
+        database = Database(args.database_url) if args.database_url else get_database()
+        cookie_result = migrate_platform_cookies(database, dry_run=args.dry_run)
+        prefix = "[dry-run] " if cookie_result.dry_run else ""
+        detail_text = "；".join(f"{label}{status}" for label, status in cookie_result.details)
+        print(
+            f"{prefix}登录态：加密入库 {cookie_result.migrated} 个，"
+            f"无明文文件 {cookie_result.missing} 个，无法解析 {cookie_result.invalid} 个"
+            + (f"（{detail_text}）" if detail_text else "")
         )
         return 0
 

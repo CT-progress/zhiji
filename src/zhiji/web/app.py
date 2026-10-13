@@ -43,6 +43,7 @@ from zhiji.errors import (
 )
 from zhiji.llm.client import LLMClient
 from zhiji.models import LLMModelConfig, TaskStatus
+from zhiji.platforms.cookies import set_profile_database
 from zhiji.storage import TaskRepository
 from zhiji.storage.scope import ANY_USER, UserScope
 from zhiji.storage.tables import TaskRow, UserRow
@@ -267,6 +268,8 @@ def create_app(
     # 认证始终落在数据库：会话后端走同一库；JSON 回退时单独解析一个库。
     auth_database = store.database or resolve_database(data_dir)
     auth = AuthService(auth_database, secret=secret_key)
+    # 平台登录态（Cookie）与账号、配置同库：密文落在这里，明文文件不再是权威存储。
+    set_profile_database(auth_database)
     task_worker = worker
     # 账号鉴权开关：显式参数优先，其次读取环境变量，默认关闭。
     require_auth = _env_flag(REQUIRE_AUTH_ENV) if require_auth is None else bool(require_auth)
@@ -806,10 +809,9 @@ def create_app(
 
     @app.delete("/api/cookies/douyin")
     def delete_douyin_cookie() -> dict:
-        from zhiji.platforms.douyin_cookies import profile_path
-        path = profile_path()
-        if path.exists():
-            path.unlink()
+        from zhiji.platforms.douyin_cookies import delete_profile
+
+        delete_profile()
         return {"ok": True}
 
     @app.get("/api/cookies/zhihu")
@@ -837,10 +839,9 @@ def create_app(
 
     @app.delete("/api/cookies/zhihu")
     def delete_zhihu_cookie() -> dict:
-        from zhiji.platforms.zhihu_cookies import profile_path
-        path = profile_path()
-        if path.exists():
-            path.unlink()
+        from zhiji.platforms.zhihu_cookies import delete_profile
+
+        delete_profile()
         return {"ok": True}
 
     @app.get("/api/cookies/bilibili")
@@ -868,10 +869,9 @@ def create_app(
 
     @app.delete("/api/cookies/bilibili")
     def delete_bilibili_cookie() -> dict:
-        from zhiji.platforms.bilibili_cookies import profile_path
-        path = profile_path()
-        if path.exists():
-            path.unlink()
+        from zhiji.platforms.bilibili_cookies import delete_profile
+
+        delete_profile()
         return {"ok": True}
 
     @app.get("/api/cookies/xiaohongshu")
@@ -899,10 +899,9 @@ def create_app(
 
     @app.delete("/api/cookies/xiaohongshu")
     def delete_xiaohongshu_cookie() -> dict:
-        from zhiji.platforms.xiaohongshu_cookies import profile_path
-        path = profile_path()
-        if path.exists():
-            path.unlink()
+        from zhiji.platforms.xiaohongshu_cookies import delete_profile
+
+        delete_profile()
         return {"ok": True}
 
     @app.post("/api/chat")

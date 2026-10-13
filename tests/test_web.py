@@ -422,3 +422,31 @@ def test_frontend_assets_split_from_html(tmp_path):
     js = client.get("/static/app.js")
     assert js.status_code == 200
     assert "javascript" in js.headers["content-type"]
+
+
+def test_cookie_saved_as_ciphertext_not_plaintext_file(tmp_path, monkeypatch):
+    """阶段 4.3：Web 保存登录态后，磁盘上不应出现明文 profile 文件。"""
+
+    from zhiji.platforms import zhihu_cookies
+    from zhiji.storage import Database, PlatformCredentialRepository
+
+    monkeypatch.setattr(
+        zhihu_cookies, "DEFAULT_PROFILE_PATH", tmp_path / "data" / "zhihu-profile.json"
+    )
+    client, _ = _client(tmp_path)
+    cookie = "d_c0=secret-d_c0-value; z_c0=secret-z_c0-value"
+
+    assert client.post("/api/cookies/zhihu", json={"cookie": cookie}).json()["ok"] is True
+    assert not (tmp_path / "data" / "zhihu-profile.json").exists()
+
+    db_path = tmp_path / "data" / "zhiji.db"
+    blob = db_path.read_bytes()
+    for suffix in ("-wal", "-shm"):
+        extra = db_path.with_name(db_path.name + suffix)
+        if extra.exists():
+            blob += extra.read_bytes()
+    assert b"secret-d_c0-value" not in blob
+
+    repo = PlatformCredentialRepository(Database(f"sqlite:///{db_path.as_posix()}"))
+    assert repo.has("zhihu") is True
+    assert repo.list_hints() == {"zhihu": "2 项"}

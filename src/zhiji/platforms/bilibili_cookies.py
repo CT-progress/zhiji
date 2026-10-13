@@ -1,7 +1,8 @@
-"""B 站登录态（Cookie + UA）的本地持久化。
+"""B 站登录态（Cookie + UA）的持久化。
 
-保存路径 ``data/bilibili-profile.json`` 属于已 gitignore 的 ``data/`` 目录，
-不会进入版本库；通用读写逻辑见 :mod:`zhiji.platforms.cookies`。
+阶段 4.3 起默认加密存进数据库 ``platform_credentials`` 表；``data/bilibili-profile.json``
+只在升级时作为迁移来源，被读到后立即加密入库并删除，明文不再长期驻留磁盘。
+通用读写逻辑见 :mod:`zhiji.platforms.cookies`。
 
 B 站字幕接口（x/player/wbi/v2）未登录时不返回字幕列表；保存 SESSDATA 后
 适配器会优先走官方字幕，缺失或失效时自动降级到音频转写。
@@ -14,6 +15,7 @@ from pathlib import Path
 from zhiji.config import PROJECT_ROOT
 from zhiji.platforms.cookies import (
     CookieProfile,
+    delete_cookie_profile,
     load_cookie_profile,
     resolve_profile_path,
     save_cookie_profile,
@@ -55,7 +57,7 @@ def save_profile(
     *,
     verified: bool = True,
 ) -> BilibiliProfile:
-    """原子写入登录态文件，返回保存后的 BilibiliProfile。"""
+    """精简 Cookie 后加密入库（显式给 path 时写入文件），返回保存的 profile。"""
 
     return save_cookie_profile(
         CookieProfile,
@@ -65,12 +67,13 @@ def save_profile(
         path,
         names=ESSENTIAL_COOKIE_NAMES,
         label="B 站",
+        platform="bilibili",
         verified=verified,
     )
 
 
 def load_profile(path: str | Path | None = None) -> BilibiliProfile | None:
-    """读取登录态；文件缺失、损坏或未包含 SESSDATA 时返回 None。"""
+    """读取登录态；数据库优先，其次旧明文文件；未包含 SESSDATA 时返回 None。"""
 
     return load_cookie_profile(
         CookieProfile,
@@ -78,4 +81,11 @@ def load_profile(path: str | Path | None = None) -> BilibiliProfile | None:
         path,
         names=ESSENTIAL_COOKIE_NAMES,
         require="SESSDATA=",
+        platform="bilibili",
     )
+
+
+def delete_profile(path: str | Path | None = None) -> bool:
+    """删除登录态：数据库里的一行 + 遗留的明文文件，返回是否真的删掉了东西。"""
+
+    return delete_cookie_profile(DEFAULT_PROFILE_PATH, path, platform="bilibili")

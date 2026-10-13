@@ -196,6 +196,46 @@ class LLMCredentialRow(Base):
         return f"<LLMCredentialRow name={self.name!r} status={self.status!r}>"
 
 
+class PlatformCredentialRow(Base):
+    """平台登录态（Cookie + UA）密文表（阶段 4.3）。
+
+    整份登录态字典（cookie / user_agent / saved_at / verified）序列化成 JSON 后
+    整体加密，库里只有 ``v1.<nonce>.<ciphertext>`` 密文与零泄露的提示
+    （形如 ``6 项``，只报 Cookie 字段个数，不含任何值）。
+
+    唯一键是 ``(user_id, platform)``；``user_id IS NULL`` 表示本机作用域，
+    与全局配置一一对应。SQLite 下 ``NULL`` 不参与唯一约束比较，本机作用域的
+    去重由仓储层保证。
+    """
+
+    __tablename__ = "platform_credentials"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "platform", name="uq_platform_credential_user_platform"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    #: 凭据归属用户；None 表示本机默认作用域
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, default=None
+    )
+    #: 平台标识：douyin / bilibili / zhihu / xiaohongshu
+    platform: Mapped[str] = mapped_column(String(32), index=True)
+    #: 整份登录态的密文，绝不含明文 Cookie
+    payload_cipher: Mapped[str] = mapped_column(Text, default="")
+    #: 零泄露提示（如 ``6 项``），供界面显示
+    hint: Mapped[str] = mapped_column(String(64), default="")
+    status: Mapped[str] = mapped_column(String(16), default=CREDENTIAL_ACTIVE)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<PlatformCredentialRow platform={self.platform!r} status={self.status!r}>"
+
+
 class AppSettingsRow(Base):
     """全局设置表（单行）：字段与 zhiji.models.AppSettings 对应。"""
 
