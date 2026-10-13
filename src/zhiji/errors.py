@@ -71,6 +71,18 @@ class AuthError(ZhijiError):
     code = "AUTH_FAILED"
 
 
+class CryptoError(ZhijiError):
+    """加解密失败：密钥不匹配、密文被篡改或格式损坏。"""
+
+    code = "CRYPTO_FAILED"
+
+
+class MasterKeyError(ZhijiError):
+    """主密钥缺失 / 格式非法 / 无法落盘。"""
+
+    code = "MASTER_KEY_UNAVAILABLE"
+
+
 class GenerationCancelledError(ZhijiError):
     """调用方主动取消（如 SSE 断连）导致的生成中断，不算失败。"""
 
