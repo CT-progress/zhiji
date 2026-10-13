@@ -1,7 +1,9 @@
 # 知记（Zhiji）落地架构设计文档
 
-> 版本：v1.0 　编制日期：2026-10-09 　代码基线：`codex/p0-fixes`（领先 `main` 8 个提交）
+> 版本：v1.1 　编制日期：2026-10-09 　修订：2026-10-13 　代码基线：本地 `main`（阶段 0–4 全部完成）
 > 文档性质：**架构设计 / 可行性评估**，不含实现代码。
+> 与 `docs/PLAN.md` 的分工：本文画**目标形态**（能长成什么样），`PLAN.md` 定**实施顺序**（先做什么）；
+> 二者口径以 `PLAN.md` 的阶段 0–7 为准。§5.1 用**实线框 / 灰底虚线框**区分「自托管形态已需要」与「产品化 / 多机形态才需要」。
 
 ---
 
@@ -56,7 +58,7 @@
 
 **依赖**：Typer / Rich / Pydantic / FastAPI / Uvicorn / httpx / Playwright / python-dotenv / PyYAML / yt-dlp / curl-cffi / html2text；可选 `asr` = faster-whisper；开发 `dev` = pytest / pytest-asyncio / ruff / mypy。
 
-**质量基线**：测试 109 通过，ruff / mypy（32 文件）全绿。
+**质量基线（2026-10-13）**：测试 366 通过 / 1 跳过，ruff 全绿，mypy 47 文件无告警。
 
 ### 2.3 能力矩阵：现状 vs 落地差距
 
@@ -104,6 +106,8 @@ Obsidian 接入的三种方式：
 - 可选增强：在 PostgreSQL 上挂 `pgvector` 做语义检索，为"上下文管理 / RAG"服务。
 
 **风险**：Obsidian 插件方案依赖用户环境；vault 文件冲突需幂等写入（用笔记 ID / front-matter 标识做 upsert）。
+
+> **v1.1 增补**：上表是**三种方式的通用对比**。按 `PLAN.md` D12，**自托管形态采用 A（直接写 vault 目录）**，理由是：本项目的产物本身就是带 YAML front-matter 的纯 Markdown、`output_dir` 已是配置项、单机部署下「服务能访问用户磁盘」天然成立；B（Local REST API 插件）降级为**跨机 / 云端形态**的候选（`PLAN.md` 5.5.4）。选择 A 的代价是必须保证**幂等写入**（见 `PLAN.md` 5.5.2）。
 
 ---
 
@@ -334,7 +338,7 @@ graph TD
     subgraph Client["客户端层"]
         C1["Web SPA"]
         C2["桌面 / 移动端"]
-        C3["Obsidian 插件 / REST"]
+        C3["Obsidian / 第三方客户端（只读消费）"]
     end
 
     subgraph Edge["接入层"]
@@ -346,7 +350,7 @@ graph TD
         S1["账号与鉴权（IAM/OAuth2）"]
         S2["凭据保险库 Key / Cookie"]
         S3["任务编排与调度"]
-        S4["配额 / 计费 / 审计"]
+        S4["配额 / 限流 / 审计"]
         S5["平台策略与能力注册表"]
         S6["笔记与知识库服务"]
     end
@@ -358,9 +362,9 @@ graph TD
 
     subgraph Data["数据面 Python Worker"]
         W1["抓取 Worker（平台适配器）"]
-        W2["浏览器 Worker（browserless）"]
+        W2["浏览器 Worker（Playwright）"]
         W3["转写 Worker（faster-whisper，GPU/CPU 池）"]
-        W4["LLM / Agent Worker（加工、RAG）"]
+        W4["LLM / Agent Worker（加工、上下文）"]
         W5["学术 Worker（元数据 / 格式转换）"]
     end
 
@@ -368,7 +372,7 @@ graph TD
         D1["PostgreSQL（业务事实源）"]
         D2["pgvector / 向量库（RAG）"]
         D3["对象存储 S3/MinIO（音频/PDF/截图）"]
-        D4["Obsidian Vault（外部知识库）"]
+        D4["Obsidian Vault（直连目录落盘）"]
     end
 
     C1 --> G1 --> G2 --> Control
@@ -382,15 +386,29 @@ graph TD
     Control --> D2
     Data --> D3
     Data --> D4
+
+    classDef later fill:#f2f2f2,stroke:#b9b9b9,stroke-dasharray:5 4,color:#8a8a8a
+    class C2,G1,G2,Q1,Q2,W5,D2,D3 later
 ```
+
+**图例（v1.1 增补）**
+
+- **实线框**：自托管形态**已经需要**的组件。
+- **灰底虚线框**（`C2` 桌面 / 移动端、`G1` 反向代理、`G2` API 网关、`Q1` 消息队列、`Q2` Redis、`W5` 学术 Worker、`D2` 向量库、`D3` 对象存储）：**阶段 6+ / 产品化阶段**才有意义。其中 `C2`、`W5`、`D3` 已在 `PLAN.md` §1.3 列为**非目标**；`G1` / `G2` / `Q1` / `Q2` / `D2` 属「**保留但未排期**」（见 `PLAN.md` §1.5）。
+- **分层结构本身不变**：客户端 / 接入 / 控制面 / 异步 / 数据面 / 存储这六层，在自托管形态下**同样成立**——阶段 1–4 的「控制面」就是 Python 单体应用自身，阶段 6 只是把这一层的**实现**换成 Java，而不是新增一层。所以**总体分层没有变化，变的是每层的实现密度与组件数量**。
 
 **设计要点**：
 
-1. **控制面与数据面分离**：Java 只管"该做什么、允不允许、算多少钱"，Python 只管"把活干出来"。这样两侧可独立伸缩、独立发布。
-2. **异步优先**：抓取/转写都是长任务，一律"提交任务 → 返回 taskId → 轮询/推送结果"，不做同步阻塞。
-3. **浏览器能力外置**：所有 Playwright 需求走 browserless/浏览器集群，避免把浏览器运行时塞进业务容器。
-4. **存储分层**：结构化 → PostgreSQL；缓存/锁/限流 → Redis；大文件 → 对象存储；语义检索 → 向量库；知识产物 → Obsidian。
-5. **策略即配置**：平台 QPS、是否需登录、合规等级、限流阈值都写入"平台注册表"，而非散落代码。
+1. **控制面与数据面分离**：控制面只管「该做什么、允不允许、算不算超配额」，数据面只管「把活干出来」。两侧可独立伸缩、独立发布。
+   - *自托管形态*：控制面就是**已有的 Python 单体**（FastAPI + 业务逻辑 + 任务表），不必先拆 Java；阶段 6 再把这一层替换为 Spring Boot，**契约不变**。
+2. **异步优先**：抓取 / 转写都是长任务，一律「提交任务 → 返回 taskId → 轮询或推送结果」，不做同步阻塞。
+   - *自托管形态*：阶段 3 起用**库内任务表 + 后台执行体**实现同一语义；MQ（Q1 / Q2）是阶段 6 的线性升级，**不是前置条件**。
+3. **浏览器能力外置**：多 Worker / 多机时，所有 Playwright 需求走 browserless 或浏览器集群，避免把浏览器运行时塞进业务容器。
+   - *自托管形态*：单机阶段浏览器**直接内嵌在应用镜像内**（Playwright 依赖随镜像分发）；browserless 只在需要横向扩 Worker 时才有收益。
+4. **存储分层**：结构化 → PostgreSQL；缓存 / 锁 / 限流 → Redis；大文件 → 对象存储；语义检索 → 向量库；知识产物 → Obsidian。
+   - *自托管形态*：结构化 → **SQLite**（阶段 1.3 已落地）；大文件 → **Docker 具名卷**（不引入 MinIO）；知识产物 → **直连 Obsidian vault 目录**（`PLAN.md` 5.5）；Redis / 向量库 / 对象存储均**不进当前阶段**。
+5. **策略即配置**：平台 QPS、是否需登录、合规等级、限流阈值都写入「平台注册表」，而非散落代码。
+   - *自托管形态*：这一条**已经成立**（平台能力注册表已在代码中），后续只是补齐策略项。
 
 ### 5.2 技术选型
 
@@ -414,6 +432,13 @@ graph TD
 | 部署 | Docker Compose → K8s | — | 分阶段，避免过早复杂 |
 | CI/CD | GitHub Actions | GitLab CI | 现有仓库在 GitHub |
 
+**阶段归属（v1.1 增补）**：上表是**目标形态的全量选型**，不等于当前阶段清单。对照 `PLAN.md`：
+
+- **阶段 1–5 实际需要**：Python 3.11+、FastAPI / Uvicorn、Pydantic、SQLite、Docker（Compose + 具名卷）、ruff / mypy / pytest、GitHub Actions。
+- **阶段 6 才需要**（「保留但未排期」，见 `PLAN.md` §1.5）：反向代理、API 网关、RabbitMQ / Kafka、Redis、PostgreSQL、pgvector、MinIO、browserless。
+- **非目标**：Kubernetes、对外 SaaS 计费、对象存储服务、学术全文抓取。
+- **身份选型降级**：Casdoor 由「首选」调整为「**仅在需要对外开放注册时才考虑**」；自托管多用户用本地账号 + 会话即可（`PLAN.md` D8）。
+
 ### 5.3 模块划分与职责
 
 **控制面（Java，新增）**
@@ -429,6 +454,8 @@ graph TD
 | `note-service` | 笔记元数据、版本、标签、与 Obsidian 映射 | upsert 幂等，front-matter 带系统 ID |
 | `audit-service` | 操作审计与合规留痕 | 不可篡改、可导出 |
 
+> **控制面表格说明（v1.1 增补）**：上表是**阶段 6 的目标模块划分**。自托管形态下这些职责**已由现有 Python 控制面兼任**（账号、凭据保险库、任务编排、审计均已落地或已排期）；阶段 6 只做**实现替换（Python → Spring Boot）**，不改变模块边界（`PLAN.md` D9）。其中 `quota-billing` 的**计费**部分与 `note-service` 的**多租户**部分属非目标；`auth-service` 在自托管形态下不依赖 Casdoor。
+
 **数据面（Python，复用现有 + 扩展）**
 
 | 模块 | 来源 | 改造点 |
@@ -436,9 +463,9 @@ graph TD
 | `platforms/` | **现有代码** | 保持适配器接口，改为"拉任务 → 执行 → 回调" |
 | `transcription/` | **现有代码** | 抽成独立 worker，支持队列消费与资源池 |
 | `llm/` | **现有代码** | Key 改由 Vault 下发，增加路由/降级/成本回传 |
-| `writers/` | **现有代码** | 增加 Obsidian REST 写出后端 |
+| `writers/` | **现有代码** | 稳定 ID + 幂等 upsert；**直连 vault 目录**（`PLAN.md` 5.5）；REST 后端留待跨机（5.5.4） |
 | `agent/` | 新增 | 多步任务编排（检索→加工→校验） |
-| `academic/` | 新增 | 元数据抓取 + CAJ 转换（合规路线） |
+| `academic/` | 新增 | 元数据抓取 + CAJ 转换（合规路线）——**非目标**，见 `PLAN.md` §1.3 |
 | `worker-runtime` | 新增 | 统一消费队列、上报心跳、优雅退出、trace 透传 |
 
 **关键：现有 `platforms/` 与 `pipeline.py` 的接口设计良好，是本次架构迁移中价值最高的可复用资产。**
@@ -461,6 +488,8 @@ graph TD
 | `note_embedding` | note_id, chunk_id, embedding(vector) | pgvector，用于 RAG |
 
 设计原则：所有业务表带 `tenant_id`/`user_id`（隔离）；`task`/`task_step` 有完整状态机；凭据一律密文列，明文永不出库。
+
+> **表结构说明（v1.1 增补）**：上表是**目标形态全量表**。自托管形态下 `tenant` / `usage_ledger` / `note_embedding` **不建**（无多租户、无计费、无 RAG）；平台登录态实际以**整份 `payload_cipher`** 存储（字段名不是 `cookie_cipher`）。**实际表结构以 `src/zhiji/storage/tables.py` 为准。**
 
 ### 5.5 接口契约
 
@@ -501,6 +530,8 @@ graph TD
 | `browserless` | 无头浏览器服务 |
 | `postgres` / `redis` / `rabbitmq` / `minio` | 存储三件套 + 对象存储 |
 
+> **v1.1 增补**：自托管形态下的**实际单机拓扑**以 `PLAN.md` 阶段 5 为准——**不引入** postgres / redis / rabbitmq / minio，只用 SQLite + Docker 具名卷 + 内嵌 Playwright；上表描述的是**产品化阶段**的形态。
+
 **阶段二：多机（小规模）**
 
 - API 与 Worker 分机部署；Worker 按类型分组（fetch/asr/agent）。
@@ -514,6 +545,8 @@ graph TD
 - `browserless` / `selenosis`：独立节点池
 - 数据库：托管 PG 或 Operator（含只读副本）
 - 命名空间与 NetworkPolicy 做租户/组件隔离
+
+> **v1.1 增补**：**Kubernetes 属非目标**（`PLAN.md` §1.3）。本节仅作**远期参考**保留，用于说明「若要规模化会是什么形态」，当前计划不涉及。
 
 ### 5.7 并发与可靠性
 
@@ -570,6 +603,18 @@ graph TD
 
 **建议**：P1–P2 可先用 Python 快速验证业务闭环，**P4 再做 Java 化**。这样避免"一边学 Java 一边改业务"的双重风险，也让 Java 控制面的职责边界被真实需求定义清楚。
 
+**P0–P6 ↔ `PLAN.md` 阶段 0–7 映射（v1.1 增补）**
+
+| 本节阶段 | `PLAN.md` 阶段 | 口径 |
+| --- | --- | --- |
+| P0 基线冻结 | 阶段 0 | 已完成 |
+| P1 服务化最小闭环 | 阶段 1–2 | 已完成 |
+| P2 账号与凭据 | 阶段 3–4 | 已完成 |
+| P3 并发与部署 | 阶段 5 | **只做容器化 + 具名卷**，不引入 Redis / MQ / browserless 集群 |
+| P4 Java 控制面 | 阶段 6（可选，最后做） | 按**责任**切分，不按接口重写（D9） |
+| P5 Obsidian 与多平台 | 阶段 **5.5** + `PLAN.md` §1.5 扩展候选 | Obsidian 幂等落盘为正式迭代；学术模块**非目标** |
+| P6 规模化 | **非目标** | 仅作远期参考 |
+
 ---
 
 ## 7. 风险登记表
@@ -598,7 +643,7 @@ graph TD
 | M3 | 多用户 + 凭据保险库 | 两用户数据互不可见；库中无明文凭据 |
 | M4 | 并发与可观测 | 目标 QPS 下 P95 达标；队列/失败率可观测 |
 | M5 | Java 控制面拆分 | 控制面与 worker 独立部署、独立扩缩 |
-| M6 | Obsidian + 学术模块 | 笔记自动同步；学术元数据可入库 |
+| M6 | Obsidian 幂等落盘（`PLAN.md` 5.5） | 笔记按稳定 ID 幂等写入 vault；学术模块**非目标** |
 
 ---
 
@@ -612,7 +657,7 @@ graph TD
 | `pipeline.py` | Worker 内部编排 | **保留逻辑**，改为队列驱动 |
 | `llm/*` | LLM Worker | 保留，Key 改由 Vault 下发 |
 | `transcription/*` | 转写 Worker | 保留，独立资源池 |
-| `writers/markdown.py` | 写出后端 | 扩展 Obsidian REST 后端 |
+| `writers/markdown.py` | 写出后端 | 稳定 ID + 幂等 upsert；**直连 vault 目录**（`PLAN.md` 5.5） |
 | `web/app.py` | 早期 API（过渡） | P4 后由 Java 控制面替代 |
 | `cli.py` | 运维/调试工具 | 保留 |
 | `config/zhiji.json` | JSON 导出 + 回退源 | 模型/设置已入库（阶段 1.3）；API Key 加密见阶段 4 |
@@ -625,6 +670,13 @@ graph TD
 - **信封加密**：用数据密钥加密数据，再用 KMS 主密钥加密数据密钥。
 - **幂等**：同一请求重复执行，结果与副作用一致。
 - **背压**：下游处理不过来时，上游主动限速/拒绝，避免级联崩溃。
+
+### 9.3 修订记录
+
+| 版本 | 日期 | 变更 |
+| --- | --- | --- |
+| v1.0 | 2026-10-09 | 初版：现状评估、五点方向可行性、目标架构、迁移路线 |
+| v1.1 | 2026-10-13 | 与 `PLAN.md` v1.2 对齐：明确**受众为通用 / 独立开发**；§5.1 增加图例，区分「自托管已需要」与「产品化 / 多机才需要」；Obsidian 接入由 REST 插件改为**直连 vault 目录**（5.5）；学术模块、K8s、对象存储、pgvector **标为非目标 / 未排期**；§6 增加 P0–P6 ↔ 阶段 0–7 映射；§5.4 表结构以 `src/zhiji/storage/tables.py` 为准 |
 
 ---
 
