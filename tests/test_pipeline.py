@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
@@ -85,6 +86,7 @@ def test_markdown_filename_uses_local_date(tmp_path):
     created = datetime.now().astimezone().isoformat(timespec="seconds")
     note = NoteDocument(
         frontmatter=NoteFrontmatter(
+            zhiji_id="zhihu_1",
             title="标题",
             source="https://example.com",
             platform="zhihu",
@@ -125,29 +127,111 @@ def test_chunk_summary_stops_when_cancelled(tmp_path):
     assert len(client.calls) == 1
 
 
-def test_markdown_writer_avoids_overwrite(tmp_path):
+def test_markdown_writer_upserts_by_zhiji_id(tmp_path):
     created = datetime.now().astimezone().isoformat(timespec="seconds")
 
-    def make_note() -> NoteDocument:
+    def make_note(body: str) -> NoteDocument:
         return NoteDocument(
             frontmatter=NoteFrontmatter(
+                zhiji_id="zhihu_1",
                 title="标题",
                 source="https://example.com",
                 platform="zhihu",
                 content_type="article",
                 created=created,
             ),
-            sections=[NoteSection(heading="", body="正文")],
+            sections=[NoteSection(heading="", body=body)],
             raw_transcript_ref="artifacts/zhihu_1/transcript.json",
         )
 
     writer = MarkdownWriter()
-    first = writer.write(make_note(), tmp_path, tmp_path)
-    second = writer.write(make_note(), tmp_path, tmp_path)
-    third = writer.write(make_note(), tmp_path, tmp_path)
+    first = writer.write(make_note("第一版正文"), tmp_path, tmp_path)
+    second = writer.write(make_note("第二版正文"), tmp_path, tmp_path)
+    third = writer.write(make_note("第三版正文"), tmp_path, tmp_path)
 
-    assert first.note_path == tmp_path / first.note_path.name
-    assert second.note_path.name.endswith("-2.md")
-    assert third.note_path.name.endswith("-3.md")
-    assert len({first.note_path, second.note_path, third.note_path}) == 3
-    assert all(path.exists() for path in (first.note_path, second.note_path, third.note_path))
+    # 同一 zhiji_id 三次写入都落在同一路径，不产生 -2.md / -3.md。
+    assert first.note_path == second.note_path == third.note_path
+    assert len(list(tmp_path.glob("*.md"))) == 1
+    assert first.updated is False
+    assert second.updated is True
+    assert third.updated is True
+    text = third.note_path.read_text(encoding="utf-8")
+    assert "第三版正文" in text
+    assert "第一版正文" not in text
+    assert "第二版正文" not in text
+    assert "<!-- zhiji:begin -->" in text
+    assert text.index("<!-- zhiji:begin -->") < text.index("<!-- zhiji:end -->")
+
+
+def test_markdown_writer_preserves_user_annotations(tmp_path):
+    created = datetime.now().astimezone().isoformat(timespec="seconds")
+
+    def make_note(body: str) -> NoteDocument:
+        return NoteDocument(
+            frontmatter=NoteFrontmatter(
+                zhiji_id="zhihu_1",
+                title="标题",
+                source="https://example.com",
+                platform="zhihu",
+                content_type="article",
+                created=created,
+            ),
+            sections=[NoteSection(heading="", body=body)],
+            raw_transcript_ref="artifacts/zhihu_1/transcript.json",
+        )
+
+    writer = MarkdownWriter()
+    first = writer.write(make_note("原始生成内容XYZ"), tmp_path, tmp_path)
+    path = first.note_path
+    path.write_text(
+        path.read_text(encoding="utf-8") + "\n## 我的批注\n\n这是手写内容，不应被覆盖。\n",
+        encoding="utf-8",
+    )
+    second = writer.write(make_note("刷新后的生成内容ZZZ"), tmp_path, tmp_path)
+
+    assert first.note_path == second.note_path
+    text = second.note_path.read_text(encoding="utf-8")
+    assert "刷新后的生成内容ZZZ" in text
+    assert "原始生成内容XYZ" not in text
+    assert "这是手写内容，不应被覆盖。" in text
+    assert second.updated is True
+    assert not second.warnings
+
+
+def test_markdown_writer_separates_distinct_ids(tmp_path):
+    created = datetime.now().astimezone().isoformat(timespec="seconds")
+
+    def make_note(zhiji_id: str) -> NoteDocument:
+        return NoteDocument(
+            frontmatter=NoteFrontmatter(
+                zhiji_id=zhiji_id,
+                title="同标题",
+                source="https://example.com",
+                platform="zhihu",
+                content_type="article",
+                created=created,
+            ),
+            sections=[NoteSection(heading="", body=zhiji_id)],
+            raw_transcript_ref=f"artifacts/{zhiji_id}/transcript.json",
+        )
+
+    writer = MarkdownWriter()
+    a = writer.write(make_note("zhihu_1"), tmp_path, tmp_path)
+    b = writer.write(make_note("zhihu_2"), tmp_path, tmp_path)
+
+    assert a.note_path != b.note_path
+    assert a.updated is False
+    assert b.updated is False
+    assert len(list(tmp_path.glob("*.md"))) == 2
+    assert _read_id(a.note_path) == "zhihu_1"
+    assert _read_id(b.note_path) == "zhihu_2"
+    a2 = writer.write(make_note("zhihu_1"), tmp_path, tmp_path)
+    assert a2.note_path == a.note_path
+    assert a2.updated is True
+    assert len(list(tmp_path.glob("*.md"))) == 2
+
+
+def _read_id(path: Path) -> str | None:
+    from zhiji.writers.markdown import _read_zhiji_id
+
+    return _read_zhiji_id(path.read_text(encoding="utf-8"))

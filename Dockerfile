@@ -26,9 +26,14 @@ COPY src ./src
 
 # 可选：构建带语音转写能力的镜像（体积明显变大，需要 faster-whisper）。
 ARG ZHIJI_WITH_ASR=0
+# 可选：把 PostgreSQL 驱动 psycopg 装进镜像，供 docker-compose 的 postgres 档使用。
+ARG ZHIJI_WITH_POSTGRES=0
 RUN python -m venv /opt/venv \
  && /opt/venv/bin/python -m pip install --upgrade pip setuptools wheel \
- && if [ "${ZHIJI_WITH_ASR}" = "1" ]; then target='.[asr]'; else target='.'; fi \
+ && extras='' \
+ && if [ "${ZHIJI_WITH_ASR}" = "1" ]; then extras="${extras:+$extras,}asr"; fi \
+ && if [ "${ZHIJI_WITH_POSTGRES}" = "1" ]; then extras="${extras:+$extras,}postgres"; fi \
+ && if [ -n "${extras}" ]; then target=".[${extras}]"; else target='.'; fi \
  && /opt/venv/bin/python -m pip install -e "${target}"
 
 # ---------- 运行阶段 ----------

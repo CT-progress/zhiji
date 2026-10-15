@@ -61,6 +61,22 @@ zhiji models                   # 列出模型配置
 zhiji config-show              # 查看当前设置
 ```
 
+## 部署（Docker Compose）
+
+最简部署：一台装了 Docker 的机器上 clone 本仓库，复制 `.env.example` 为 `.env`，然后：
+
+```powershell
+docker compose up -d            # 起服务（数据落具名卷，重启不丢）
+docker compose logs -f zhiji     # 跟随日志
+# 浏览器打开 http://127.0.0.1:8000，首次访问注册一个账号即可
+```
+
+> 默认只监听 `127.0.0.1`（只本机可访问）。要让局域网其他设备访问，把 `.env` 里
+> `ZHIJI_BIND` 改成 `0.0.0.0`，并理解这会暴露 API Key / Cookie 管理接口——公网开放
+> 请配合反向代理 + HTTPS（见 `docs/DEPLOY.md` 与 `docs/PLAN.md` 5.3 附录）。
+
+安装、升级、备份、PostgreSQL、Obsidian vault 接入等完整说明见 **[docs/DEPLOY.md](docs/DEPLOY.md)**。
+
 ## 项目结构
 
 ```
@@ -101,3 +117,5 @@ Ubuntu 与 Windows 上按 Python 3.11 / 3.12 跑 ruff、mypy、pytest 三件套�
 - [x] B 站 / 知乎 / 抖音链路 + Web 工作台
 - [x] 小红书图文 / 视频笔记适配器与 Cookie 管理（搜索暂未接入）
 - [x] B 站搜索（WBI 签名接口）
+- [x] 容器化部署（Dockerfile + Compose，见 docs/DEPLOY.md）
+- [x] 笔记按 zhiji_id 幂等落库，输出目录可指向 Obsidian vault

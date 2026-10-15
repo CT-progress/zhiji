@@ -47,6 +47,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate compose file
+        run: docker compose -f docker-compose.yml config -q
+
       - name: Build image
         run: docker build -t zhiji:ci .
 

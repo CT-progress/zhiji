@@ -1,0 +1,92 @@
+# 知记（zhiji）Compose 编排（阶段 5.2）
+#
+# 常用命令：
+#   docker compose up -d             启动（数据落具名卷，重启不丢）
+#   docker compose logs -f zhiji     跟随日志
+#   docker compose ps                查看状态（含健康检查结果）
+#   docker compose down              停止并移除容器（具名卷保留）
+#   docker compose down -v           连数据卷一并删除（清空所有数据）
+#
+# 可调项集中在同目录的 .env（由 .env.example 复制而来）。
+# 没有 .env 也能直接启动：未提供的项一律走下面的默认值。
+#
+# 切换 PostgreSQL（可选档）：
+#   1) 构建带驱动的镜像：docker compose build --build-arg ZHIJI_WITH_POSTGRES=1
+#   2) 在 .env 里指向 postgres 服务，例如
+#      ZHIJI_DATABASE_URL=postgresql+psycopg://zhiji:zhiji@postgres:5432/zhiji
+#   3) docker compose --profile postgres up -d
+#      表结构在首次启动时自动创建；python -m zhiji.migrate 仅用于导入旧版 JSON 数据。
+
+name: zhiji
+
+services:
+  zhiji:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: zhiji:local
+    restart: unless-stopped
+
+    # 容器内固定监听 0.0.0.0:8000，对外暴露范围完全由下面的 ports 决定。
+    environment:
+      ZHIJI_HOST: 0.0.0.0
+      ZHIJI_PORT: "8000"
+      # 容器绑非本机地址，默认强制账号登录；确要关闭须同时用共享令牌兜底。
+      ZHIJI_REQUIRE_AUTH: "${ZHIJI_REQUIRE_AUTH:-1}"
+      ZHIJI_TOKEN: "${ZHIJI_TOKEN:-}"
+      # 主密钥留空则自动生成并落盘到数据卷的 data/.master_key，重启后不变。
+      ZHIJI_MASTER_KEY: "${ZHIJI_MASTER_KEY:-}"
+      ZHIJI_SECRET_KEY: "${ZHIJI_SECRET_KEY:-}"
+      ZHIJI_SESSION_TTL: "${ZHIJI_SESSION_TTL:-}"
+      ZHIJI_BCRYPT_ROUNDS: "${ZHIJI_BCRYPT_ROUNDS:-}"
+      ZHIJI_DATABASE_URL: "${ZHIJI_DATABASE_URL:-}"
+
+    ports:
+      # 默认只绑本机回环，访问 http://127.0.0.1:8000 。
+      # 要让同局域网的其他设备访问，把 .env 里的 ZHIJI_BIND 改成 0.0.0.0 。
+      - "${ZHIJI_BIND:-127.0.0.1}:${ZHIJI_HOST_PORT:-8000}:8000"
+
+    volumes:
+      - zhiji-data:/app/data
+      - zhiji-config:/app/config
+      - zhiji-output:/app/output
+      - zhiji-tmp:/app/.tmp
+      # 想让笔记直接写进 Obsidian vault？取消下一行注释（路径换成你的 vault），
+      # 再到 Web「设置 → 保存路径」里填 /vault（详见 docs/DEPLOY.md）。
+      # - D:/Vault/Zhiji:/vault
+
+    healthcheck:
+      # 与镜像内 HEALTHCHECK 等价，显式写出便于 docker compose ps 直接显示状态。
+      test:
+        - CMD
+        - /opt/venv/bin/python
+        - -c
+        - "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('ZHIJI_PORT', '8000') + '/api/health', timeout=4)"
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  # 可选档：仅在 `--profile postgres` 时启动，默认完全不参与。
+  postgres:
+    profiles: ["postgres"]
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-zhiji}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-zhiji}"
+      POSTGRES_DB: "${POSTGRES_DB:-zhiji}"
+    volumes:
+      - zhiji-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-zhiji} -d ${POSTGRES_DB:-zhiji}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  zhiji-data:
+  zhiji-config:
+  zhiji-output:
+  zhiji-tmp:
+  zhiji-pgdata:

@@ -2,7 +2,7 @@
 
 > 版本：v1.2 　编制日期：2026-10-09 　修订：2026-10-13
 > 配套文档：`docs/ARCHITECTURE.md`（架构设计，回答"为什么这样设计"）；本文回答"具体怎么做、按什么顺序做"。
-> 代码基线：本地 `main`（阶段 0–4 全部完成，阶段 5 的 5.1 已完成；按约定暂不推送）
+> 代码基线：本地 `main`（阶段 0–5 全部完成；按约定暂不推送）
 > 修订说明（v1.2）：新增 §1.5「扩展候选」，明确区分**没排期**与**不做**；Obsidian 幂等落盘由“远期”升格为
 > **阶段 5.5**；§1.3 补记单机形态的对象存储（MinIO / S3）为非目标；ADR 补 D12。
 > 修订说明（v1.1）：产品形态由“对外提供服务的系统”收敛为**自托管的多用户服务**；新增第 7 阶段「作品集交付」；
@@ -21,7 +21,7 @@
 | **总体路线** | 阶段 0 基线冻结 → 阶段 1–5（工程底座与持久化 → 异步任务闭环 → 账号与数据隔离 → 凭据安全 → 容器化部署）→ **阶段 5.5 产物落库（Obsidian）** → 阶段 6 Java 控制面（可选）；另有贯穿全程的阶段 7：作品集交付 |
 | **语言策略** | 先用 Python 打通业务闭环；Java 控制面放到最后的可选阶段 |
 | **实施原则** | 不重写、只叠加；每一步测试全绿；每一步可独立回滚 |
-| **当前状态** | 阶段 0–4 全部完成（4.1 加密模块 / 4.2 LLM Key / 4.3 Cookie / 4.4 健康检查）；阶段 5 的 5.1 镜像构建完成，5.2 Compose 待做（本机提交，未推送） |
+| **当前状态** | 阶段 0–5 全部完成（含 5.2 Compose / 5.4 部署文档 / 5.5 Obsidian 接入）；本机提交，未推送 |
 
 ---
 
@@ -104,7 +104,7 @@ Java 控制面保持「可选、最后做」，**不为了展示 Java 而提前�
 
 | 能力 | 状态 | 触发条件 |
 | --- | --- | --- |
-| **Obsidian 直连 vault（幂等落盘）** | ✅ **已升格为正式迭代**（阶段 5.5） | 阶段 5 完成后即可做，不依赖阶段 6 |
+| **Obsidian 直连 vault（幂等落盘）** | ✅ **已完成**（阶段 5.5） | 稳定 `zhiji_id` + 区段标记幂等 upsert；详见 §5.5 |
 | 语义检索 / RAG（pgvector） | ⏸ 保留，待前提 | 阶段 6 引入 PostgreSQL 之后；SQLite 上不存在该能力 |
 | 对象存储（MinIO / S3） | ❌ **不做**（见 §1.3） | 仅当进入多机 / 多副本形态 |
 | 多步 Agent 编排（检索 → 加工 → 校验） | ⏸ 保留，待前提 | 任务闭环与凭据安全稳定之后 |
@@ -175,8 +175,8 @@ Java 控制面保持「可选、最后做」，**不为了展示 Java 而提前�
 | **2** | 异步任务闭环 | 任务状态机 + 后台执行 + 查询 API | ✅ 已完成 |
 | **3** | 账号与数据隔离 | 用户表 + 登录 + 按用户隔离 | ✅ 已完成 |
 | **4** | 凭据安全 | Key / Cookie 加密存储、健康检查与迁移 | ✅ 已完成（4.1–4.4） |
-| **5** | 容器化部署 | Dockerfile + Compose + 部署文档 | 🚧 进行中（5.1 完成，5.2 待做） |
-| **5.5** | 产物落库（Obsidian 接入） | front-matter 稳定 ID + 幂等 upsert；输出目录可指向 vault | ⬜ 待开始 |
+| **5** | 容器化部署 | Dockerfile + Compose + 部署文档 | ✅ 完成（5.1 镜像 / 5.2 Compose / 5.4 部署文档） |
+| **5.5** | 产物落库（Obsidian 接入） | front-matter 稳定 ID + 幂等 upsert；输出目录可指向 vault | ✅ 完成 |
 | **6** | Java 控制面（可选） | Spring Boot 承接鉴权 / 配额 / 编排 / 审计 | ⬜ 待开始 |
 | **7** | 作品集交付 | README、图示、ADR 索引、演示与冒烟脚本 | 🚧 贯穿全程（收尾验收） |
 
@@ -374,7 +374,7 @@ AAD 绑定、用户作用域隔离、更新不丢 Key、删除模型连带删凭
 - 新增 `docker/entrypoint.sh`：默认按 `ZHIJI_HOST` / `ZHIJI_PORT`（0.0.0.0:8000）前台起 Web，
   并**默认追加 `--require-auth`**（容器绑的是 0.0.0.0，裸奔不可接受）；`ZHIJI_TOKEN` 可切回共享令牌，
   `ZHIJI_REQUIRE_AUTH=0` 才关闭（由 `zhiji web` 自身的安全检查兜底）；显式传命令时原样执行，
-  例如 `docker run --rm -v zhiji-data:/app/data zhiji python -m zhiji migrate --migrate-keys`；
+  例如 `docker run --rm -v zhiji-data:/app/data zhiji python -m zhiji.migrate --migrate-keys`；
   用 `exec` 启动，SIGTERM 直达 uvicorn，`docker stop` 能优雅退出。
 - `.github/workflows/ci.yml` 新增 `docker` job：`docker build` → 检查容器内 `id -u` 是否为 10001
   （非 root）→ 起容器轮询 `/api/health` 直到 200 → 失败时打印容器日志。
@@ -386,6 +386,36 @@ AAD 绑定、用户作用域隔离、更新不丢 Key、删除模型连带删凭
 不烤密钥、`.dockerignore` 挡住本机状态与密钥；`pytest` / `ruff` / `mypy` / `node --check` 全绿。
 手动验证命令：构建 `docker build -t zhiji:5.1 .`，
 运行 `docker run --rm -p 8000:8000 -v zhiji-data:/app/data -v zhiji-config:/app/config zhiji:5.1`。
+
+**5.2 落地细节**
+
+- `docker-compose.yml`：单服务 `zhiji`（构建本仓库镜像）+ 四个具名卷（`data` /
+  `config` / `output` / `.tmp`）+ 显式健康检查（打 `/api/health`）；默认端口
+  只绑 `127.0.0.1:8000`，`ZHIJI_BIND=0.0.0.0` 才对局域网开放。
+- 环境变量集中在 `.env`（由 `.env.example` 复制），新增 `ZHIJI_BIND` /
+  `ZHIJI_HOST_PORT` / `POSTGRES_*`；未提供一律走 compose 默认值。
+- 可选 PostgreSQL 档：放在 `profiles: ["postgres"]` 默认不启动；需先
+  `docker compose build --build-arg ZHIJI_WITH_POSTGRES=1` 把 `psycopg` 装进镜像，
+  再 `--profile postgres up -d` 并把 `ZHIJI_DATABASE_URL` 指向 postgres 服务。
+  表结构由 `Database.create_all()` 在首次启动时自动建，`python -m zhiji.migrate`
+  只用于导入旧版 JSON 数据。
+- vault 接入：在 `volumes` 加一行 bind mount（如 `- D:/Vault/Zhiji:/vault`），
+  再到 Web「设置 → 保存路径」填 `/vault`（配置入库，持久在 `zhiji-config` 卷）。
+
+**5.2 验收**：本机无 Docker CLI，真实 `docker compose up` 交给 CI。新增
+`tests/test_compose.py` 守住服务名 / 镜像 / 默认回环绑定 / 四个具名卷 / 健康检查 /
+postgres 默认不启动 / 迁移命令必须是 `python -m zhiji.migrate`（跨文件契约）；
+CI 的 `docker` job 增加 `docker compose -f docker-compose.yml config -q` 做真实校验。
+
+**5.4 落地细节**
+
+- 新增 `docs/DEPLOY.md`：安装（clone + `.env` + `docker compose up -d` + 首次注册）、
+  环境变量表、数据与卷的备份 / 恢复、升级流程、可选 PostgreSQL、Obsidian vault
+  接入（bind mount + 设置页保存路径）、常见问题 FAQ。
+- `README.md` 增加「部署（Docker Compose）」一节并指向 `docs/DEPLOY.md`。
+
+**5.4 验收**：新人按 `docs/DEPLOY.md` 可独立完成单机部署；`pytest` / `ruff` /
+`mypy` 全绿。
 
 ---
 
@@ -408,6 +438,26 @@ AAD 绑定、用户作用域隔离、更新不丢 Key、删除模型连带删凭
 
 **风险**：整篇覆盖可能吃掉用户在笔记里手写的批注 → 5.5.2 必须明确取舍（建议：只覆盖知记生成的部分，
 或把生成内容放在固定的区段标记之间，区段之外一律不动）。
+
+**5.5 落地细节**
+
+- **5.5.1 稳定 ID**：`NoteFrontmatter` 新增必填 `zhiji_id`，值取既有的
+  `{platform}_{content_id}`；`pipeline._build_note` 与 `render_note` 都带上，
+  front-matter 里排在 `title` 之前。
+- **5.5.2 幂等 upsert**：`MarkdownWriter.write` 先按 `zhiji_id` 在输出目录扫
+  已有 `*.md`（廉价字符串预筛 + 解析 front-matter），命中→**原路径原地更新**，
+  未命中→走原 `_unique_path` 新建。取舍规则采用**区段标记**：生成内容包在
+  `<!-- zhiji:begin -->` 与 `<!-- zhiji:end -->` 之间，更新时只覆写这段；
+  **区段之后**用户手写的批注保留。旧文件没有标记则整篇覆写，并在
+  `OutputReceipt.warnings` 里告警；新增 `OutputReceipt.updated` 标识新建 / 更新。
+- **5.5.3 指向 vault**：代码侧 `resolve_output_dir()` 已支持绝对路径，无需改动；
+  容器下须 **bind mount**（如 `- D:/Vault/Zhiji:/vault`）再在 Web「设置 → 保存路径」
+  填 `/vault`（配置入库，持久在 `zhiji-config` 卷）。详见 `docs/DEPLOY.md`。
+- **5.5.4 REST 后端**：跳过（跨机部署时再补，D12）。
+
+**5.5 验收**：`tests/test_pipeline.py` 重写原 `test_markdown_writer_avoids_overwrite`
+为三条：同 `zhiji_id` 三次写入落同一路径且无 `-2.md`、区段后手写批注保留、不同 id
+互不覆盖；380 passed / 1 skipped / ruff 全绿 / mypy 47 files。
 
 ---
 
@@ -504,7 +554,9 @@ Java 只是换一个实现。
 
 ## 9. 下一步
 
-**进入阶段 5 · 迭代 5.2：Compose 编排**
+**阶段 5 已关闭（5.2 Compose / 5.4 部署文档 / 5.5 Obsidian 接入全部完成）**
+
+下面是 5.2 当时的计划与验收，保留作为记录：
 
 5.1 已经把「本机 start.bat」换成可构建的镜像：
 
@@ -528,9 +580,8 @@ Java 只是换一个实现。
 **修订后的顺序（v1.1）**：先做 **5.2 Compose + 5.4 部署文档**，让“一条命令起在自己机器上”成立；
 5.3（反代 / HTTPS）降为**附录**，只在决定公网开放时才动。
 
-**受众优先级已定（2026-10-13，见 §1.4 与 D11）**：**通用 / 独立开发**——自托管形态 + 完整闭环优先，
-Java 控制面保持可选、最后做。因此顺序是：先做 **5.2 Compose + 5.4 部署文档**，接着做
-**5.5 产物落库（Obsidian 接入）**，同时把阶段 7 的 7.1–7.3 当持续动作做掉，最后再评估是否启动阶段 6。
+**下一步**：阶段 5 已全部完成（5.2 / 5.4 / 5.5），本机提交未推送。后续可按需启动
+阶段 6（Java 控制面，可选）或推进阶段 7（作品集交付）。公网部署需要时再补 5.3 反代 / HTTPS 附录。
 
 ### 迭代记录
 
@@ -555,3 +606,6 @@ Java 控制面保持可选、最后做。因此顺序是：先做 **5.2 Compose 
 | 计划书 v1.1 修订 | ✅ 完成 | 定位收敛为自托管形态；新增第 7 阶段（作品集交付）；阶段 6 改为按责任切分；补 D8–D10；新增 §1.4 目标与受众；修正阶段总览过期状态 |
 | 受众优先级落定 | ✅ 完成 | 定为「通用 / 独立开发」：自托管 + 完整闭环优先，阶段 6 保持可选、最后做；§0 新增「受众」行，§1.4 / §9 同步更新，ADR 补 D11 |
 | 计划书 v1.2 修订 | ✅ 完成 | 新增 §1.5 扩展候选（区分「没排期」与「不做」）；Obsidian 幂等落盘由“远期”升格为**阶段 5.5**（含 4 个子迭代与验收标准）；§1.3 补记单机对象存储为非目标；ADR 补 D12 |
+| 5.2 Compose 编排 | ✅ 完成 | 新增 `docker-compose.yml`（单服务 + 四具名卷 + 健康检查 + 可选 postgres 档）/ `.env.example` 补 `ZHIJI_BIND` 等变量 / `Dockerfile` 加 `--build-arg ZHIJI_WITH_POSTGRES` / `pyproject` 加 `postgres` 可选依赖 / `tests/test_compose.py` 守不变量 / CI 加 `docker compose config -q`；`python -m zhiji migrate` 笔误一并修正 |
+| 5.4 部署文档 | ✅ 完成 | 新增 `docs/DEPLOY.md`（安装/升级/备份/PostgreSQL/Obsidian vault/FAQ）/ `README.md` 增部署一节 |
+| 5.5 Obsidian 接入 | ✅ 完成 | `NoteFrontmatter` 加必填 `zhiji_id` / `MarkdownWriter` 按 id 幂等 upsert + 区段标记（`begin/end`）保留区段外手写批注 / `OutputReceipt.updated` / 重写 `test_markdown_writer_avoids_overwrite` 为三条用例；380 passed / 1 skipped / ruff 全绿 / mypy 47 files |

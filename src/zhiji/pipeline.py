@@ -213,6 +213,7 @@ class NotePipeline:
         ref = bundle.ref
         raw_ref = f"artifacts/{ref.platform.value}_{ref.content_id}/transcript.json"
         frontmatter = NoteFrontmatter(
+            zhiji_id=f"{ref.platform.value}_{ref.content_id}",
             title=meta.title,
             source=ref.source_url,
             platform=ref.platform.value,

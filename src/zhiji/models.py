@@ -163,6 +163,7 @@ class AppConfig(BaseModel):
 
 
 class NoteFrontmatter(BaseModel):
+    zhiji_id: str
     title: str
     source: str
     platform: str
@@ -191,5 +192,6 @@ class OutputReceipt(BaseModel):
     platform: str
     content_id: str
     title: str
+    updated: bool = False
     transcript_path: Path | None = None
     warnings: list[str] = Field(default_factory=list)

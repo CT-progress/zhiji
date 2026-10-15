@@ -5,7 +5,7 @@
 #   docker run -p 8000:8000 -v zhiji-data:/app/data zhiji
 #
 # 传入命令时直接执行该命令，便于跑一次性任务（迁移、体检等）：
-#   docker run --rm -v zhiji-data:/app/data zhiji python -m zhiji migrate --migrate-keys
+#   docker run --rm -v zhiji-data:/app/data zhiji python -m zhiji.migrate --migrate-keys
 #
 # 可用环境变量：
 #   ZHIJI_HOST          监听地址，默认 0.0.0.0
