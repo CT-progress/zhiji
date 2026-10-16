@@ -1,0 +1,250 @@
+openapi: 3.0.3
+info:
+  title: Zhiji Worker API
+  description: |
+    控制面（Java / Spring Boot）与数据面（Python worker）之间的内部契约。
+
+    两个方向的接口：
+    - **Worker API**：控制面调用 worker，派发任务、取消任务、探测健康。
+    - **Callback API**：worker 调用控制面，上报进度与结果。
+
+    契约版本通过 `schemaVersion` 字段标识；向后兼容的变更递增 minor，
+    破坏性变更递增 major 并同时更新本文档。
+  version: 1.0.0
+  contact:
+    name: Zhiji
+servers:
+  - url: http://127.0.0.1:8001
+    description: Python worker (local dev)
+  - url: http://control-plane:8000
+    description: Java control plane (Docker)
+
+paths:
+  /internal/v1/tasks:dispatch:
+    post:
+      tags: [worker]
+      summary: Dispatch a task to the worker
+      description: |
+        控制面将任务派发给 worker 执行。worker 接收后立即返回 `accepted`，
+        在后台执行 pipeline 并通过回调 API 上报进度与结果。
+
+        幂等：同一 `taskId` 重复派发时，若任务已存在且非终态则返回 `accepted`，
+        若已终态则返回 `409`。
+      operationId: dispatchTask
+      parameters:
+        - $ref: '#/components/parameters/TraceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskDispatch'
+      responses:
+        '202':
+          description: Task accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DispatchResponse'
+        '409':
+          description: Task already in terminal state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /internal/v1/tasks/{taskId}:cancel:
+    post:
+      tags: [worker]
+      summary: Cancel a running task
+      description: |
+        控制面请求 worker 取消正在执行的任务。worker 设置取消标志，
+        pipeline 检测到后提前退出并通过回调上报 `task.failed`（cause=cancelled）。
+      operationId: cancelTask
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/TraceId'
+      responses:
+        '200':
+          description: Cancel accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelResponse'
+        '404':
+          description: Task not found on this worker
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /internal/v1/worker/health:
+    get:
+      tags: [worker]
+      summary: Worker health check
+      operationId: workerHealth
+      responses:
+        '200':
+          description: Worker is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerHealth'
+
+  /internal/v1/tasks/{taskId}/events:
+    post:
+      tags: [callback]
+      summary: Report task events from worker to control plane
+      description: |
+        Worker 通过此接口向控制面上报任务执行过程中的事件：
+        `task.started`、`step.progress`、`step.succeeded`、`step.failed`、
+        `task.succeeded`、`task.failed`。
+      operationId: reportTaskEvent
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/TraceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskEvent'
+      responses:
+        '200':
+          description: Event acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AckResponse'
+        '404':
+          description: Task not found on control plane
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  parameters:
+    TraceId:
+      name: X-Trace-Id
+      in: header
+      description: W3C-style trace identifier propagated across control plane and worker.
+      schema:
+        type: string
+        format: uuid
+
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    TaskDispatch:
+      type: object
+      required: [schemaVersion, taskId, type, input, traceId, attempt]
+      properties:
+        schemaVersion:
+          type: string
+          default: "1.0"
+        taskId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          nullable: true
+        type:
+          type: string
+          example: note.generate
+        platform:
+          type: string
+          nullable: true
+          enum: [douyin, bilibili, zhihu, xiaohongshu]
+        input:
+          type: object
+          description: Task-specific input payload.
+        traceId:
+          type: string
+          format: uuid
+        attempt:
+          type: integer
+          minimum: 1
+          default: 1
+        priority:
+          type: integer
+          default: 0
+
+    DispatchResponse:
+      type: object
+      properties:
+        accepted:
+          type: boolean
+        taskId:
+          type: string
+
+    CancelResponse:
+      type: object
+      properties:
+        cancelled:
+          type: boolean
+        taskId:
+          type: string
+
+    WorkerHealth:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        version:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: string
+
+    TaskEvent:
+      type: object
+      required: [schemaVersion, taskId, eventType, traceId, timestamp]
+      properties:
+        schemaVersion:
+          type: string
+          default: "1.0"
+        taskId:
+          type: string
+        eventType:
+          type: string
+          enum:
+            - task.started
+            - step.progress
+            - step.succeeded
+            - step.failed
+            - task.succeeded
+            - task.failed
+        traceId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        data:
+          type: object
+          description: Event-specific payload (progress, result, error, etc.)
+
+    AckResponse:
+      type: object
+      properties:
+        acknowledged:
+          type: boolean
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string

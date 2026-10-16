@@ -21,7 +21,7 @@
 | **总体路线** | 阶段 0 基线冻结 → 阶段 1–5（工程底座与持久化 → 异步任务闭环 → 账号与数据隔离 → 凭据安全 → 容器化部署）→ **阶段 5.5 产物落库（Obsidian）** → 阶段 6 Java 控制面（可选）；另有贯穿全程的阶段 7：作品集交付 |
 | **语言策略** | 先用 Python 打通业务闭环；Java 控制面放到最后的可选阶段 |
 | **实施原则** | 不重写、只叠加；每一步测试全绿；每一步可独立回滚 |
-| **当前状态** | 阶段 0–5 全部完成（含 5.2 Compose / 5.4 部署文档 / 5.5 Obsidian 接入）；本机提交，未推送 |
+| **当前状态** | 阶段 0–5 全部完成；阶段 6.1 契约固化完成；本机提交，未推送 |
 
 ---
 
@@ -177,7 +177,7 @@ Java 控制面保持「可选、最后做」，**不为了展示 Java 而提前�
 | **4** | 凭据安全 | Key / Cookie 加密存储、健康检查与迁移 | ✅ 已完成（4.1–4.4） |
 | **5** | 容器化部署 | Dockerfile + Compose + 部署文档 | ✅ 完成（5.1 镜像 / 5.2 Compose / 5.4 部署文档） |
 | **5.5** | 产物落库（Obsidian 接入） | front-matter 稳定 ID + 幂等 upsert；输出目录可指向 vault | ✅ 完成 |
-| **6** | Java 控制面（可选） | Spring Boot 承接鉴权 / 配额 / 编排 / 审计 | ⬜ 待开始 |
+| **6** | Java 控制面（可选） | Spring Boot 承接鉴权 / 配额 / 编排 / 审计 | 🚧 进行中（6.1 完成） |
 | **7** | 作品集交付 | README、图示、ADR 索引、演示与冒烟脚本 | 🚧 贯穿全程（收尾验收） |
 
 **关于第 7 阶段**：它**不排在最后执行**——从当前阶段起就随每个迭代顺手维护（见 §3 原则 7 与阶段 7 说明），
@@ -609,3 +609,5 @@ Java 只是换一个实现。
 | 5.2 Compose 编排 | ✅ 完成 | 新增 `docker-compose.yml`（单服务 + 四具名卷 + 健康检查 + 可选 postgres 档）/ `.env.example` 补 `ZHIJI_BIND` 等变量 / `Dockerfile` 加 `--build-arg ZHIJI_WITH_POSTGRES` / `pyproject` 加 `postgres` 可选依赖 / `tests/test_compose.py` 守不变量 / CI 加 `docker compose config -q`；`python -m zhiji migrate` 笔误一并修正 |
 | 5.4 部署文档 | ✅ 完成 | 新增 `docs/DEPLOY.md`（安装/升级/备份/PostgreSQL/Obsidian vault/FAQ）/ `README.md` 增部署一节 |
 | 5.5 Obsidian 接入 | ✅ 完成 | `NoteFrontmatter` 加必填 `zhiji_id` / `MarkdownWriter` 按 id 幂等 upsert + 区段标记（`begin/end`）保留区段外手写批注 / `OutputReceipt.updated` / 重写 `test_markdown_writer_avoids_overwrite` 为三条用例；380 passed / 1 skipped / ruff 全绿 / mypy 47 files |
+| 6.1 契约固化 | ✅ 完成 | OpenAPI 契约 docs/contracts/worker-api.yaml（dispatch/cancel/health + callback events，schema 1.0）/ Python worker 模块 src/zhiji/worker/（models/trace/callback/service/api）+ 19 项契约测试 / Java Spring Boot 控制面 control-plane/（model/service/client/controller）+ 19 项契约测试；trace id 跨语言透传；398 passed / 1 skipped / ruff 全绿 / mypy 53 files / mvn test 全绿 / 
+ode --check 通过 |

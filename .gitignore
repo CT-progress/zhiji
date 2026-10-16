@@ -24,3 +24,6 @@ dist/
 
 # 凭据加密主密钥（data/ 已整体忽略，这里再兜底一层）
 .master_key
+
+# Java / Maven build artifacts
+control-plane/target/

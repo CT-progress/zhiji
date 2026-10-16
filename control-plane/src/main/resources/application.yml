@@ -1,0 +1,12 @@
+spring:
+  application:
+    name: zhiji-control-plane
+  main:
+    banner-mode: off
+
+server:
+  port: 8000
+
+zhiji:
+  worker:
+    base-url: http://127.0.0.1:8001
