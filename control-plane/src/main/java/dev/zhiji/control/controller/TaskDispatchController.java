@@ -2,6 +2,7 @@ package dev.zhiji.control.controller;
 
 import dev.zhiji.control.client.WorkerClient;
 import dev.zhiji.control.model.*;
+import dev.zhiji.control.service.RateLimiter;
 import dev.zhiji.control.service.TaskService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,6 +21,10 @@ import java.util.UUID;
  * <p>Client-facing (web UI, admin). Requires JWT authentication.
  * The authenticated user's ID is propagated as the task's userId,
  * linking tasks to their owner for data isolation.
+ *
+ * <p>Rate limiting is applied per-platform before dispatching to the
+ * worker. When the QPS limit is exceeded, a 429 is returned without
+ * contacting the worker.
  */
 @RestController
 @RequestMapping("/api/v1/tasks")
@@ -29,14 +34,22 @@ public class TaskDispatchController {
 
     private final WorkerClient workerClient;
     private final TaskService taskService;
+    private final RateLimiter rateLimiter;
 
-    public TaskDispatchController(WorkerClient workerClient, TaskService taskService) {
+    public TaskDispatchController(WorkerClient workerClient, TaskService taskService, RateLimiter rateLimiter) {
         this.workerClient = workerClient;
         this.taskService = taskService;
+        this.rateLimiter = rateLimiter;
     }
 
     @PostMapping
-    public ResponseEntity<DispatchResponse> dispatchTask(@RequestBody TaskDispatch request) {
+    public ResponseEntity<?> dispatchTask(@RequestBody TaskDispatch request) {
+        // Per-platform rate limit check
+        if (!rateLimiter.tryAcquire(request.platform())) {
+            return ResponseEntity.status(429)
+                .body(Map.of("error", "rate_limited", "platform", request.platform() != null ? request.platform() : "default"));
+        }
+
         String userId = currentUserId();
         TaskDispatch dispatch = new TaskDispatch(
             TaskDispatch.SCHEMA_VERSION,
@@ -50,11 +63,15 @@ public class TaskDispatchController {
             request.priority()
         );
         taskService.registerDispatch(dispatch.taskId(), dispatch.traceId());
-        DispatchResponse resp = workerClient.dispatch(dispatch);
-        if (resp == null) {
-            return ResponseEntity.status(502).build();
+
+        try {
+            DispatchResponse resp = workerClient.dispatch(dispatch);
+            return ResponseEntity.accepted().body(resp);
+        } catch (Exception e) {
+            log.warn("worker dispatch failed for task {}: {}", dispatch.taskId(), e.getMessage());
+            return ResponseEntity.status(502)
+                .body(Map.of("error", "worker_unavailable", "taskId", dispatch.taskId()));
         }
-        return ResponseEntity.accepted().body(resp);
     }
 
     @GetMapping("/{taskId}")
@@ -67,16 +84,19 @@ public class TaskDispatchController {
     }
 
     @PostMapping("/{taskId}/cancel")
-    public ResponseEntity<CancelResponse> cancelTask(@PathVariable String taskId) {
+    public ResponseEntity<?> cancelTask(@PathVariable String taskId) {
         TaskService.TaskState state = taskService.get(taskId);
         if (state == null) {
             return ResponseEntity.notFound().build();
         }
-        CancelResponse resp = workerClient.cancel(taskId, state.traceId());
-        if (resp == null) {
-            return ResponseEntity.status(502).build();
+        try {
+            CancelResponse resp = workerClient.cancel(taskId, state.traceId());
+            return ResponseEntity.ok(resp);
+        } catch (Exception e) {
+            log.warn("worker cancel failed for task {}: {}", taskId, e.getMessage());
+            return ResponseEntity.status(502)
+                .body(Map.of("error", "worker_unavailable", "taskId", taskId));
         }
-        return ResponseEntity.ok(resp);
     }
 
     private String currentUserId() {

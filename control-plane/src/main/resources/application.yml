@@ -22,6 +22,12 @@ spring:
     console:
       enabled: false
 
+  data:
+    redis:
+      host: ${ZHIJI_REDIS_HOST:localhost}
+      port: ${ZHIJI_REDIS_PORT:6379}
+      password: ${ZHIJI_REDIS_PASSWORD:}
+
 server:
   port: 8000
 
@@ -35,3 +41,39 @@ zhiji:
     issuer: zhiji-control-plane
   callback:
     shared-secret: ${ZHIJI_CALLBACK_SECRET:zhiji-callback-dev-secret}
+  ratelimit:
+    default-qps: 5
+    platform-limits:
+      douyin: 3
+      bilibili: 5
+      zhihu: 4
+      xiaohongshu: 3
+    use-redis: false
+  circuit-breaker:
+    enabled: true
+    failure-rate-threshold: 50
+    slow-call-duration-threshold: 10s
+    slow-call-rate-threshold: 80
+    wait-duration-in-open-state: 30s
+    sliding-window-size: 10
+    minimum-number-of-calls: 5
+    permitted-number-of-calls-in-half-open-state: 3
+
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        failure-rate-threshold: 50
+        slow-call-duration-threshold: 10s
+        slow-call-rate-threshold: 80
+        wait-duration-in-open-state: 30s
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        permitted-number-of-calls-in-half-open-state: 3
+        sliding-window-type: COUNT_BASED
+        automatic-transition-from-open-to-half-open-enabled: true
+    instances:
+      worker-dispatch:
+        base-config: default
+      worker-health:
+        base-config: default

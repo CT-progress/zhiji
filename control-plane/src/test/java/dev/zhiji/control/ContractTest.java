@@ -180,8 +180,8 @@ class ContractTest {
     }
 
     @Test
-    @DisplayName("dispatch: worker failure returns null without throwing")
-    void workerClient_dispatchFailure_returnsNull() {
+    @DisplayName("dispatch: worker failure throws exception")
+    void workerClient_dispatchFailure_throwsException() {
         RestClient.Builder builder = RestClient.builder();
         MockRestServiceServer mockServer = MockRestServiceServer.bindTo(builder).build();
         WorkerClient client = new WorkerClient(
@@ -197,8 +197,7 @@ class ContractTest {
             TaskDispatch.SCHEMA_VERSION, "task-x", null, "note.generate",
             null, Map.of(), null, 1, 0
         );
-        DispatchResponse resp = client.dispatch(dispatch);
-        assertNull(resp);
+        assertThrows(Exception.class, () -> client.dispatch(dispatch));
         mockServer.verify();
     }
 
