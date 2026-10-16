@@ -3,7 +3,12 @@ package dev.zhiji.control.controller;
 import dev.zhiji.control.client.WorkerClient;
 import dev.zhiji.control.model.*;
 import dev.zhiji.control.service.TaskService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
@@ -12,13 +17,15 @@ import java.util.UUID;
 /**
  * Task dispatch and query endpoints.
  *
- * <p>This is the control-plane-facing side: clients (web UI, admin) call these
- * to submit tasks. The control plane dispatches to the Python worker via
- * {@link WorkerClient} and tracks state via {@link TaskService}.
+ * <p>Client-facing (web UI, admin). Requires JWT authentication.
+ * The authenticated user's ID is propagated as the task's userId,
+ * linking tasks to their owner for data isolation.
  */
 @RestController
 @RequestMapping("/api/v1/tasks")
 public class TaskDispatchController {
+
+    private static final Logger log = LoggerFactory.getLogger(TaskDispatchController.class);
 
     private final WorkerClient workerClient;
     private final TaskService taskService;
@@ -30,10 +37,11 @@ public class TaskDispatchController {
 
     @PostMapping
     public ResponseEntity<DispatchResponse> dispatchTask(@RequestBody TaskDispatch request) {
+        String userId = currentUserId();
         TaskDispatch dispatch = new TaskDispatch(
             TaskDispatch.SCHEMA_VERSION,
             request.taskId() != null ? request.taskId() : UUID.randomUUID().toString(),
-            request.userId(),
+            userId,
             request.type(),
             request.platform(),
             request.input(),
@@ -69,5 +77,13 @@ public class TaskDispatchController {
             return ResponseEntity.status(502).build();
         }
         return ResponseEntity.ok(resp);
+    }
+
+    private String currentUserId() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth != null && auth.getPrincipal() instanceof Jwt jwt) {
+            return jwt.getSubject();
+        }
+        return "anonymous";
     }
 }

@@ -4,9 +4,34 @@ spring:
   main:
     banner-mode: off
 
+  datasource:
+    url: jdbc:h2:mem:zhiji
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: false
+
+  h2:
+    console:
+      enabled: false
+
 server:
   port: 8000
 
 zhiji:
   worker:
     base-url: http://127.0.0.1:8001
+  jwt:
+    secret: zhiji-dev-secret-key-change-in-production-at-least-32-bytes-long
+    access-token-ttl: PT15M
+    refresh-token-ttl: P7D
+    issuer: zhiji-control-plane
+  callback:
+    shared-secret: ${ZHIJI_CALLBACK_SECRET:zhiji-callback-dev-secret}
