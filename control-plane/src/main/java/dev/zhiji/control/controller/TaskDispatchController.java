@@ -2,6 +2,7 @@ package dev.zhiji.control.controller;
 
 import dev.zhiji.control.client.WorkerClient;
 import dev.zhiji.control.model.*;
+import dev.zhiji.control.service.AuditService;
 import dev.zhiji.control.service.RateLimiter;
 import dev.zhiji.control.service.TaskMessageProducer;
 import dev.zhiji.control.service.TaskMetrics;
@@ -43,17 +44,20 @@ public class TaskDispatchController {
     private final TaskService taskService;
     private final RateLimiter rateLimiter;
     private final TaskMetrics metrics;
+    private final AuditService auditService;
 
     public TaskDispatchController(TaskMessageProducer producer,
                                  WorkerClient workerClient,
                                  TaskService taskService,
                                  RateLimiter rateLimiter,
-                                 TaskMetrics metrics) {
+                                 TaskMetrics metrics,
+                                 AuditService auditService) {
         this.producer = producer;
         this.workerClient = workerClient;
         this.taskService = taskService;
         this.rateLimiter = rateLimiter;
         this.metrics = metrics;
+        this.auditService = auditService;
     }
 
     @PostMapping
@@ -78,10 +82,13 @@ public class TaskDispatchController {
             request.attempt(),
             request.priority()
         );
-        taskService.registerDispatch(dispatch.taskId(), dispatch.traceId());
+        taskService.registerDispatch(dispatch.taskId(), dispatch.traceId(), userId);
 
         try {
             producer.publish(dispatch);
+            auditService.record(userId, "TASK_DISPATCHED", "TASK",
+                dispatch.taskId(), dispatch.traceId(),
+                Map.of("platform", dispatch.platform(), "type", dispatch.type()));
             return ResponseEntity.accepted()
                 .body(new DispatchResponse(true, dispatch.taskId()));
         } catch (Exception e) {

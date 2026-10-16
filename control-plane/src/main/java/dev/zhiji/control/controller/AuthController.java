@@ -2,6 +2,7 @@ package dev.zhiji.control.controller;
 
 import dev.zhiji.control.dto.*;
 import dev.zhiji.control.model.User;
+import dev.zhiji.control.service.AuditService;
 import dev.zhiji.control.service.AuthService;
 import dev.zhiji.control.service.JwtService;
 import dev.zhiji.control.service.TokenRevocationService;
@@ -14,6 +15,8 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.Map;
 
 /**
  * Authentication endpoints: register, login, refresh, logout, me.
@@ -32,12 +35,15 @@ public class AuthController {
     private final AuthService authService;
     private final JwtService jwtService;
     private final TokenRevocationService revocationService;
+    private final AuditService auditService;
 
     public AuthController(AuthService authService, JwtService jwtService,
-                          TokenRevocationService revocationService) {
+                          TokenRevocationService revocationService,
+                          AuditService auditService) {
         this.authService = authService;
         this.jwtService = jwtService;
         this.revocationService = revocationService;
+        this.auditService = auditService;
     }
 
     @PostMapping("/register")
@@ -48,6 +54,8 @@ public class AuthController {
                 user.getId(), user.getUsername(),
                 java.util.List.copyOf(user.getRoles())
             );
+            auditService.record(user.getId(), "USER_REGISTERED", "USER",
+                user.getId(), null, Map.of("username", user.getUsername()));
             return ResponseEntity.status(HttpStatus.CREATED).body(tokens);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().build();
@@ -60,6 +68,8 @@ public class AuthController {
     public ResponseEntity<TokenResponse> login(@Valid @RequestBody LoginRequest request) {
         try {
             TokenResponse tokens = authService.login(request.username(), request.password());
+            auditService.record(tokens.username(), "USER_LOGIN", "USER",
+                tokens.username(), null, Map.of());
             return ResponseEntity.ok(tokens);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
@@ -100,6 +110,8 @@ public class AuthController {
             if (jti != null && exp != null) {
                 jwtService.revoke(jti, exp);
             }
+            auditService.record(jwt.getSubject(), "USER_LOGOUT", "USER",
+                jwt.getSubject(), null, Map.of());
         }
         return ResponseEntity.noContent().build();
     }

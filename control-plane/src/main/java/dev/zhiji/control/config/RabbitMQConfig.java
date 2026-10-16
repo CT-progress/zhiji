@@ -18,10 +18,15 @@ import org.springframework.context.annotation.Configuration;
  *   zhiji.tasks.dlx (dead-letter direct exchange)
  *     |-- zhiji.tasks.dispatch.dlq (queue)
  *     |-- routing key: dispatch
+ *
+ *   zhiji.audit (direct exchange)
+ *     |-- zhiji.audit.events (queue)
+ *     |-- routing key: audit.event
  * </pre>
  *
  * <p>Messages that fail after max retries are routed to the DLQ for
- * inspection and compensation.
+ * inspection and compensation. Audit events flow through a separate
+ * exchange to keep audit traffic isolated from task dispatch.
  */
 @Configuration
 public class RabbitMQConfig {
@@ -33,6 +38,10 @@ public class RabbitMQConfig {
     public static final String DLQ_QUEUE = "zhiji.tasks.dispatch.dlq";
     public static final String DLQ_ROUTING_KEY = "dispatch";
 
+    public static final String AUDIT_EXCHANGE = "zhiji.audit";
+    public static final String AUDIT_QUEUE = "zhiji.audit.events";
+    public static final String AUDIT_ROUTING_KEY = "audit.event";
+
     @Bean
     public DirectExchange taskExchange() {
         return new DirectExchange(TASK_EXCHANGE, true, false);
@@ -41,6 +50,11 @@ public class RabbitMQConfig {
     @Bean
     public DirectExchange dlxExchange() {
         return new DirectExchange(DLX_EXCHANGE, true, false);
+    }
+
+    @Bean
+    public DirectExchange auditExchange() {
+        return new DirectExchange(AUDIT_EXCHANGE, true, false);
     }
 
     @Bean
@@ -57,6 +71,11 @@ public class RabbitMQConfig {
     }
 
     @Bean
+    public Queue auditQueue() {
+        return QueueBuilder.durable(AUDIT_QUEUE).build();
+    }
+
+    @Bean
     public Binding dispatchBinding(Queue dispatchQueue, DirectExchange taskExchange) {
         return BindingBuilder.bind(dispatchQueue)
             .to(taskExchange)
@@ -68,6 +87,13 @@ public class RabbitMQConfig {
         return BindingBuilder.bind(dlqQueue)
             .to(dlxExchange)
             .with(DLQ_ROUTING_KEY);
+    }
+
+    @Bean
+    public Binding auditBinding(Queue auditQueue, DirectExchange auditExchange) {
+        return BindingBuilder.bind(auditQueue)
+            .to(auditExchange)
+            .with(AUDIT_ROUTING_KEY);
     }
 
     @Bean

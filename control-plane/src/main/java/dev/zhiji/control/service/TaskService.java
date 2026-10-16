@@ -24,6 +24,7 @@ public class TaskService {
     public record TaskState(
         String taskId,
         String traceId,
+        String userId,
         String status,
         int progress,
         String lastEvent,
@@ -49,16 +50,20 @@ public class TaskService {
                     error = s;
                 }
             }
-            return new TaskState(taskId, traceId, newStatus, newProgress, lastEvent, error);
+            return new TaskState(taskId, traceId, userId, newStatus, newProgress, lastEvent, error);
         }
     }
 
     private final Map<String, TaskState> tasks = new ConcurrentHashMap<>();
 
-    public TaskState registerDispatch(String taskId, String traceId) {
-        TaskState state = new TaskState(taskId, traceId, "pending", 0, null, null);
+    public TaskState registerDispatch(String taskId, String traceId, String userId) {
+        TaskState state = new TaskState(taskId, traceId, userId, "pending", 0, null, null);
         tasks.put(taskId, state);
         return state;
+    }
+
+    public TaskState registerDispatch(String taskId, String traceId) {
+        return registerDispatch(taskId, traceId, null);
     }
 
     public TaskState get(String taskId) {

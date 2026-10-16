@@ -2,11 +2,14 @@ package dev.zhiji.control.controller;
 
 import dev.zhiji.control.model.AckResponse;
 import dev.zhiji.control.model.TaskEvent;
+import dev.zhiji.control.service.AuditService;
 import dev.zhiji.control.service.TaskService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.Map;
 
 /**
  * Receives task event callbacks from the Python worker.
@@ -21,9 +24,11 @@ public class TaskCallbackController {
     private static final Logger log = LoggerFactory.getLogger(TaskCallbackController.class);
 
     private final TaskService taskService;
+    private final AuditService auditService;
 
-    public TaskCallbackController(TaskService taskService) {
+    public TaskCallbackController(TaskService taskService, AuditService auditService) {
         this.taskService = taskService;
+        this.auditService = auditService;
     }
 
     @PostMapping
@@ -39,6 +44,10 @@ public class TaskCallbackController {
         if (updated == null) {
             return ResponseEntity.notFound().build();
         }
+
+        auditService.record(updated.userId(), event.eventType(), "TASK",
+            event.taskId(), event.traceId(), Map.of());
+
         return ResponseEntity.ok(new AckResponse(true));
     }
 }
