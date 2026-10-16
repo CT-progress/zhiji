@@ -3,6 +3,8 @@ package dev.zhiji.control.controller;
 import dev.zhiji.control.client.WorkerClient;
 import dev.zhiji.control.model.*;
 import dev.zhiji.control.service.RateLimiter;
+import dev.zhiji.control.service.TaskMessageProducer;
+import dev.zhiji.control.service.TaskMetrics;
 import dev.zhiji.control.service.TaskService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,9 +24,13 @@ import java.util.UUID;
  * The authenticated user's ID is propagated as the task's userId,
  * linking tasks to their owner for data isolation.
  *
- * <p>Rate limiting is applied per-platform before dispatching to the
- * worker. When the QPS limit is exceeded, a 429 is returned without
- * contacting the worker.
+ * <p>Rate limiting is applied per-platform before publishing to RabbitMQ.
+ * When the QPS limit is exceeded, a 429 is returned without contacting
+ * the broker.
+ *
+ * <p>Dispatch is asynchronous: the controller publishes a message to
+ * RabbitMQ and returns 202 immediately. The consumer then forwards
+ * to the Python worker. Cancel is still synchronous (direct HTTP).
  */
 @RestController
 @RequestMapping("/api/v1/tasks")
@@ -32,22 +38,32 @@ public class TaskDispatchController {
 
     private static final Logger log = LoggerFactory.getLogger(TaskDispatchController.class);
 
+    private final TaskMessageProducer producer;
     private final WorkerClient workerClient;
     private final TaskService taskService;
     private final RateLimiter rateLimiter;
+    private final TaskMetrics metrics;
 
-    public TaskDispatchController(WorkerClient workerClient, TaskService taskService, RateLimiter rateLimiter) {
+    public TaskDispatchController(TaskMessageProducer producer,
+                                 WorkerClient workerClient,
+                                 TaskService taskService,
+                                 RateLimiter rateLimiter,
+                                 TaskMetrics metrics) {
+        this.producer = producer;
         this.workerClient = workerClient;
         this.taskService = taskService;
         this.rateLimiter = rateLimiter;
+        this.metrics = metrics;
     }
 
     @PostMapping
     public ResponseEntity<?> dispatchTask(@RequestBody TaskDispatch request) {
         // Per-platform rate limit check
         if (!rateLimiter.tryAcquire(request.platform())) {
+            metrics.incRateLimited();
             return ResponseEntity.status(429)
-                .body(Map.of("error", "rate_limited", "platform", request.platform() != null ? request.platform() : "default"));
+                .body(Map.of("error", "rate_limited",
+                    "platform", request.platform() != null ? request.platform() : "default"));
         }
 
         String userId = currentUserId();
@@ -65,12 +81,13 @@ public class TaskDispatchController {
         taskService.registerDispatch(dispatch.taskId(), dispatch.traceId());
 
         try {
-            DispatchResponse resp = workerClient.dispatch(dispatch);
-            return ResponseEntity.accepted().body(resp);
+            producer.publish(dispatch);
+            return ResponseEntity.accepted()
+                .body(new DispatchResponse(true, dispatch.taskId()));
         } catch (Exception e) {
-            log.warn("worker dispatch failed for task {}: {}", dispatch.taskId(), e.getMessage());
+            log.warn("failed to publish task {} to broker: {}", dispatch.taskId(), e.getMessage());
             return ResponseEntity.status(502)
-                .body(Map.of("error", "worker_unavailable", "taskId", dispatch.taskId()));
+                .body(Map.of("error", "broker_unavailable", "taskId", dispatch.taskId()));
         }
     }
 

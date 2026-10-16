@@ -21,7 +21,7 @@
 | **总体路线** | 阶段 0 基线冻结 → 阶段 1–5（工程底座与持久化 → 异步任务闭环 → 账号与数据隔离 → 凭据安全 → 容器化部署）→ **阶段 5.5 产物落库（Obsidian）** → 阶段 6 Java 控制面（可选）；另有贯穿全程的阶段 7：作品集交付 |
 | **语言策略** | 先用 Python 打通业务闭环；Java 控制面放到最后的可选阶段 |
 | **实施原则** | 不重写、只叠加；每一步测试全绿；每一步可独立回滚 |
-| **当前状态** | 阶段 0–5 全部完成；阶段 6.1–6.3 完成（契约固化 + 鉴权与身份 + 配额与限流）；本机提交，未推送 |
+| **当前状态** | 阶段 0–5 全部完成；阶段 6.1–6.4 完成（契约固化 + 鉴权与身份 + 配额与限流 + 编排与可观测）；本机提交，未推送 |
 
 ---
 
@@ -177,7 +177,7 @@ Java 控制面保持「可选、最后做」，**不为了展示 Java 而提前�
 | **4** | 凭据安全 | Key / Cookie 加密存储、健康检查与迁移 | ✅ 已完成（4.1–4.4） |
 | **5** | 容器化部署 | Dockerfile + Compose + 部署文档 | ✅ 完成（5.1 镜像 / 5.2 Compose / 5.4 部署文档） |
 | **5.5** | 产物落库（Obsidian 接入） | front-matter 稳定 ID + 幂等 upsert；输出目录可指向 vault | ✅ 完成 |
-| **6** | Java 控制面（可选） | Spring Boot 承接鉴权 / 配额 / 编排 / 审计 | 🚧 进行中（6.1–6.3 完成） |
+| **6** | Java 控制面（可选） | Spring Boot 承接鉴权 / 配额 / 编排 / 审计 | 🚧 进行中（6.1–6.4 完成） |
 | **7** | 作品集交付 | README、图示、ADR 索引、演示与冒烟脚本 | 🚧 贯穿全程（收尾验收） |
 
 **关于第 7 阶段**：它**不排在最后执行**——从当前阶段起就随每个迭代顺手维护（见 §3 原则 7 与阶段 7 说明），
@@ -613,4 +613,6 @@ Java 只是换一个实现。
 | 6.2 鉴权与身份 | ✅ 完成 | Spring Security JWT 资源服务器（HS256，标准 claims：sub/iss/iat/exp/jti + roles/username/type）/ User JPA 实体 + UserRepository / AuthController（register/login/refresh/logout/me）/ TokenRevocationService（内存 blocklist，6.3 换 Redis）/ RBAC（USER/ADMIN，路由级 hasRole）/ 回调共享密钥（X-Callback-Secret filter）/ refresh one-time use + logout 吊销；17 项 AuthTest + 16 项 ContractTest 全绿 / 398 passed / 1 skipped / ruff 全绿 / mypy 53 files | OpenAPI 契约 docs/contracts/worker-api.yaml（dispatch/cancel/health + callback events，schema 1.0）/ Python worker 模块 src/zhiji/worker/（models/trace/callback/service/api）+ 19 项契约测试 / Java Spring Boot 控制面 control-plane/（model/service/client/controller）+ 19 项契约测试；trace id 跨语言透传；398 passed / 1 skipped / ruff 全绿 / mypy 53 files / mvn test 全绿 / 
 ode --check 通过 |
 | 6.3 配额与限流 | ✅ 完成 | Redis 令牌桶（按平台独立 QPS：douyin=3, bilibili=5, zhihu=4, xiaohongshu=3）+ InMemory/Redis 双实现（@ConditionalOnProperty 切换）/ Resilience4j 熔断器（worker-dispatch + worker-health 实例，@CircuitBreaker 注解 AOP 代理）/ TaskDispatchController 限流拦截返回 429 + 熔断后 CallNotPermittedException 降级 502 / RateLimitConfig 条件装配 RateLimitProperties；5 项 RateLimitTest 全绿（QPS 内放行、超限 429、跨平台独立、429 不触达 worker、未认证 401）/ 38 项 Java 测试全绿（16 ContractTest + 17 AuthTest + 5 RateLimitTest）/ mvn test BUILD SUCCESS |
+
+| 6.4 编排与可观测 | ✅ 完成 | RabbitMQ 拓扑（zhiji.tasks direct exchange + dispatch queue + DLX/DLQ）/ TaskMessage 载荷 + Jackson2JsonMessageConverter / TaskMessageProducer 发布（trace ID 透传为 x-trace-id header + messageId=taskId）/ TaskMessageConsumer 消费（幂等：TaskService 状态检查，running/succeeded 跳过；失败重抛触发 Spring AMQP retry；DLQ handler 清理 + 计数）/ TaskDispatchController 改为异步发布返回 202 / Micrometer + Prometheus（TaskMetrics：dispatched/rate_limited/worker_failures/dlq 四计数器，/actuator/prometheus 端点）/ spring-boot-starter-actuator + micrometer-registry-prometheus / 7 项 TaskMessageTest 全绿（生产者参数验证、消费者正常调度、幂等 running/succeeded 跳过、失败重抛、DLQ 清理+未知任务）/ 45 项 Java 测试全绿 / mvn test BUILD SUCCESS |
 

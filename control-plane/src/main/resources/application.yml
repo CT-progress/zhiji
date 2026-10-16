@@ -28,8 +28,38 @@ spring:
       port: ${ZHIJI_REDIS_PORT:6379}
       password: ${ZHIJI_REDIS_PASSWORD:}
 
+  rabbitmq:
+    host: ${ZHIJI_RABBITMQ_HOST:localhost}
+    port: ${ZHIJI_RABBITMQ_PORT:5672}
+    username: ${ZHIJI_RABBITMQ_USER:guest}
+    password: ${ZHIJI_RABBITMQ_PASSWORD:guest}
+    connection-timeout: 2s
+    listener:
+      simple:
+        auto-startup: ${ZHIJI_RABBITMQ_LISTENER_AUTO_STARTUP:false}
+        concurrency: 1
+        max-concurrency: 3
+        retry:
+          enabled: true
+          max-attempts: 3
+          initial-interval: 1s
+          multiplier: 2
+          max-interval: 10s
+
 server:
   port: 8000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+  metrics:
+    tags:
+      application: ${spring.application.name}
 
 zhiji:
   worker:
