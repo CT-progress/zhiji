@@ -60,6 +60,14 @@ docker compose up -d
 
 ### 本机开发
 
+一键脚本（首次运行自动创建 venv、安装依赖、迁移数据库）：
+
+```powershell
+.\scripts\quickstart.bat
+```
+
+或手动：
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -69,14 +77,7 @@ zhiji check-env          # 验证环境
 zhiji web                # 启动 Web 服务 (http://127.0.0.1:8000)
 ```
 
-Java 控制面（可选，见 [docs/PLAN.md](docs/PLAN.md) 阶段 6）：
-
-```powershell
-cd control-plane
-mvn spring-boot:run      # 需要 JDK 17 + Maven
-```
-
-> Whisper 模型由 faster-whisper 在首次转写时自动下载（默认 `small`）。
+冒烟测试：`python scripts\smoke_test.py`（需先启动服务）。演示流程见 [docs/DEMO.md](docs/DEMO.md)。
 
 ## 使用
 
@@ -176,4 +177,4 @@ CI（GitHub Actions）在 Ubuntu 与 Windows 上跑 ruff、mypy、pytest 三件�
 - [x] 容器化部署 (Docker Compose)
 - [x] Obsidian vault 接入 (幂等 upsert)
 - [x] Java 控制面 (JWT 鉴权 + 限流熔断 + RabbitMQ 编排 + 审计)
-- [ ] 作品集交付收尾 (README / 图示 / ADR / 演示脚本)
+- [x] 作品集交付收尾 (README / 图示 / ADR / 演示脚本)

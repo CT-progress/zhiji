@@ -619,3 +619,4 @@ ode --check 通过 |
 | 7.1 README 重构 | ✅ 完成 | README 重写：30 秒说清"是什么 / 给谁用 / 一条命令怎么跑"，Mermaid 架构图内嵌，链接 ARCHITECTURE / DEPLOY / PLAN / ADR；恢复被编码损坏的 PLAN.md 并补记 6.5 审计迭代记录 |
 | 7.2 图示 | ✅ 完成 | ARCHITECTURE.md 新增 §5.9：数据流图（控制面 + 数据面完整链路：TaskDispatch → RabbitMQ → Worker → Callback → Audit → Outbox）+ 任务状态机图（pending → running → succeeded/failed/cancelled，终态无出边），Mermaid 内嵌与代码一起版本化 |
 | 7.3 ADR 索引与补录 | ✅ 完成 | docs/adr/ 独立目录：README.md 索引（D1-D12 链接表）+ 12 个独立 ADR 文件，每条含背景 / 备选方案 / 推翻条件，能回答"为什么不用另一种" |
+| 7.4 演示与冒烟脚本 | ✅ 完成 | scripts/quickstart.bat 一键启动（首次自动创建 venv / 安装依赖 / 迁移数据库 / 启动服务）/ scripts/smoke_test.py 端到端冒烟测试（健康检查 → 注册 → 登录 → 鉴权访问 → 模型/平台/会话列表 → 登出）/ docs/DEMO.md 3 分钟录屏脚本（演示流程 + 冒烟测试 + 录屏建议）|
