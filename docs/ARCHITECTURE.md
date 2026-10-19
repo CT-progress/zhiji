@@ -565,6 +565,52 @@ graph TD
 
 **必须接受的现实**：抓取的并发上限主要由**平台风控**决定，而不是服务器资源。因此"限流 + 账号池 + 浏览器指纹池 + 代理池"是核心能力，而不是可选项。
 
+### 5.9 任务数据流与状态机
+
+#### 数据流图（控制面 + 数据面完整链路）
+
+```mermaid
+flowchart LR
+    U(("用户")) -->|POST /tasks<br/>JWT| TC["TaskDispatchController"]
+    TC -->|限流检查| RL["令牌桶<br/>Redis"]
+    TC -->|发布消息| MQ["RabbitMQ<br/>zhiji.tasks"]
+    MQ -->|消费| C["TaskMessageConsumer"]
+    C -->|HTTP dispatch<br/>熔断保护| WC["WorkerClient"]
+    WC -->|POST /dispatch| PW["Python Worker"]
+    PW --> P1["平台适配器"]
+    P1 --> P2["转写/字幕"]
+    P2 --> P3["LLM 加工"]
+    P3 --> P4["Markdown 落盘"]
+    PW -->|POST /callback<br/>事件回调| CB["TaskCallbackController"]
+    CB -->|更新状态| TS["TaskService"]
+    CB -->|审计 + outbox| AS["AuditService"]
+    AS -->|同事务双写| DB[("H2/PostgreSQL")]
+    OP["OutboxPublisher<br/>@Scheduled"] -->|轮询| DB
+    OP -->|发布遗留事件| MQ2["RabbitMQ<br/>outbox.events"]
+    TC -.->|审计| AS
+```
+
+> **自托管单机形态**：控制面退化为 Python FastAPI 单体，TaskService 即 SQLite 任务表 + 进程内 worker，RabbitMQ / Redis / 审计 / Outbox 均不启动。数据流简化为：Web 提交 → 任务表 → 后台 worker 取活 → pipeline 执行 → 状态回写 → SSE 推送。
+
+#### 任务状态机
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending : 提交任务
+    pending --> running : worker 取活抢占
+    pending --> cancelled : 用户取消
+    running --> succeeded : 处理完成
+    running --> failed : 异常 / 不可重试错误
+    running --> cancelled : 用户取消（协作式）
+    succeeded --> [*]
+    failed --> [*]
+    cancelled --> [*]
+```
+
+> 状态流转规则（`src/zhiji/models.py` `TASK_TRANSITIONS`）：`pending` 可转 `running` / `cancelled`；`running` 可转 `succeeded` / `failed` / `cancelled`；三个终态无出边。非法流转抛 `TaskTransitionError`。Java 控制面的 `TaskEvent`（`task.succeeded` / `task.failed`）通过回调驱动同一状态机。
+
+
+
 ### 5.8 安全与合规
 
 **安全**
