@@ -64,7 +64,7 @@ def main():
     check("GET /api/health -> 200", code == 200, f"got {code}")
     if code == 200:
         data = json.loads(body)
-        check("health status=ok", data.get("status") == "ok", body)
+        check("health ok=true", data.get("ok") is True, body)
 
     # 2. Auth status (anonymous)
     print("[2/7] 匿名鉴权状态")
@@ -72,7 +72,7 @@ def main():
     check("GET /api/auth/status -> 200", code == 200, f"got {code}")
     if code == 200:
         data = json.loads(body)
-        check("anonymous authenticated=false", data.get("authenticated") is False, body)
+        check("anonymous user=null", data.get("user") is None, body)
 
     # 3. Register
     print("[3/7] 注册测试用户")
@@ -95,7 +95,7 @@ def main():
     check("GET /api/auth/me -> 200", code == 200, f"got {code}")
     if code == 200:
         data = json.loads(body)
-        check("me username matches", data.get("username") == username, body)
+        check("me username matches", data.get("user", {}).get("username") == username, body)
 
     # 5. Models / Platforms
     print("[5/7] 模型与平台列表")
@@ -103,7 +103,7 @@ def main():
     check("GET /api/models -> 200", code == 200, f"got {code}")
     if code == 200:
         data = json.loads(body)
-        check("models is a list", isinstance(data, list), body)
+        check("models is a list", isinstance(data.get("models"), list), body)
 
     code, body, _ = req("GET", "/api/platforms", cookie=cookie)
     check("GET /api/platforms -> 200", code == 200, f"got {code}")
