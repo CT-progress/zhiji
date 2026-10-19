@@ -178,4 +178,4 @@ CI（GitHub Actions）在 Ubuntu 与 Windows 上跑 ruff、mypy、pytest 三件�
 - [x] Obsidian vault 接入 (幂等 upsert)
 - [x] Java 控制面 (JWT 鉴权 + 限流熔断 + RabbitMQ 编排 + 审计)
 - [x] 作品集交付收尾 (README / 图示 / ADR / 演示脚本)
-- [ ] 控制面与数据面集成 (阶段 8：前端路由切 Java / Python 退化为纯 worker / 生产中间件 / 部署编排)
+- [ ] 本地一体化应用，桌面端前身 (阶段 8：Java 托管前端+API / Python 退化为纯 worker / 生产中间件 / 一键启动打包)

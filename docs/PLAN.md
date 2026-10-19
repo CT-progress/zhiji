@@ -6,7 +6,7 @@
 > 修订说明（v1.2）：新增 §1.5「扩展候选」，明确区分**没排期**与**不做**；Obsidian 幂等落盘由“远期”升格为
 > **阶段 5.5**；§1.3 补记单机形态的对象存储（MinIO / S3）为非目标；ADR 补 D12。
 > 修订说明（v1.1）：产品形态由“对外提供服务的系统”收敛为**自托管的多用户服务**；新增第 7 阶段「作品集交付」；
-| **8** | 控制面与数据面集成（产品化） | 前端路由切 Java / Python 退化为纯 worker / 生产中间件切换 / 多服务编排部署 | 🔜 计划中 |
+| **8** | 控制面与数据面集成（本地一体化应用，桌面端前身） | Java 托管前端 + API 统一入口 / Python 退化为纯 worker / 生产中间件 / 一键启动打包 | 🔜 计划中 |
 > 阶段 6 由“照抄接口”改为按责任切分；受众优先级落定为**通用 / 独立开发**；修正阶段总览的过期状态。
 > 依据见 §8 的 D8–D12。
 
@@ -506,27 +506,42 @@ Java 只是换一个实现。
 
 ---
 
-### 阶段 8：控制面与数据面集成（产品化）
+### 阶段 8：控制面与数据面集成（本地一体化应用，桌面端前身）
 
-**目标**：把 Java 控制面与 Python 数据面从"两套并行系统"拼成"一个统一产品"。阶段 6 证明了控制面架构成立，阶段 7 让它被看见，但两者至今没有端到端接通——前端仍然直连 Python，Java 控制面独立空转。本阶段补上这一步：让请求真正经过鉴权 / 限流 / 编排后再到达数据面。
+**目标**：把 Java 控制面与 Python 数据面从"两套并行系统"拼成"一个本地一体化 Web 应用"——Java 作为统一后端同时托管前端页面和 API，Python 退化为后台 worker。用户只感知一个入口（一个端口、一条命令），所有请求经过鉴权 / 限流 / 编排后到达数据面。这是桌面端的前一步：将来包成 Tauri / Electron 时，只需把 JRE + Python 运行时 + 前端资源打进安装包，桌面壳打开 webview 指向 localhost:port 即可。
+
+**架构变化**：
+
+```
+阶段 8 之前（当前）：
+  浏览器 → Python FastAPI（前端 + API + pipeline）
+  Java 控制面 → 独立空转
+
+阶段 8 之后：
+  浏览器 → Java 后端（前端静态文件 + API）
+                    ↓ RabbitMQ / HTTP dispatch
+              Python worker（pipeline 执行 + 回调）
+  PG / Redis / RabbitMQ 作为中间件
+```
 
 **前提**：阶段 6 已完成（JWT 鉴权、Redis 限流、RabbitMQ 编排、审计、Outbox），阶段 7 已交付（README / 图示 / ADR / 演示脚本）。
 
 | 迭代 | 内容 | 验收标准 |
 | --- | --- | --- |
-| **8.1 前端路由切换** | Web 前端的 API 请求从直连 Python FastAPI 改为经过 Java 控制面：鉴权走 JWT、限流走令牌桶、任务提交走 RabbitMQ 异步编排；Python FastAPI 只保留静态文件托管和 SSE 推送 | 浏览器所有操作经 Java 控制面完成，JWT 鉴权生效，限流拦截可见，任务提交返回 202 + taskId |
-| **8.2 数据面退化为纯 worker** | Python 侧移除 Web 业务路由（auth / tasks / models / credentials），只保留 `/dispatch`（接收 Java HTTP 调用）+ `/callback`（回调 Java）+ pipeline 执行；凭据加密、平台适配器、转写、LLM 加工、落盘等数据面能力不变 | Python 进程不再直接服务用户请求；Java dispatch → Python worker → callback → Java 回写全链路跑通 |
-| **8.3 生产中间件切换** | 数据库从 H2 / SQLite 切 PostgreSQL（控制面 + 数据面共用）；Redis 从内存回退切真实实例（限流 + 令牌吊销）；RabbitMQ 从嵌入式切独立实例（编排 + DLQ + Outbox） | docker compose up 启动 PG + Redis + RabbitMQ + Java + Python 五服务；数据重启不丢；限流 / 熔断 / 审计在真实中间件下全绿 |
-| **8.4 部署编排与公网就绪** | Nginx/Caddy 反向代理 + HTTPS（5.3 附录升格）；Docker Compose 多服务编排（healthcheck + 依赖顺序 + 资源限制）；`.env` 生产配置模板；备份脚本（PG dump + 卷快照） | `docker compose up -d` 一条命令起全部服务；HTTPS 证书自动续期；备份脚本可恢复；从零到跑通 ≤ 15 分钟 |
+| **8.1 Java 托管前端 + API 统一入口** | 前端静态文件（现有 `src/zhiji/web/static/`）迁移到 Java Spring Boot 的 `static/` 资源目录，Java 同时服务前端页面和 REST API；前端的 fetch / SSE 请求改为同源调用 Java 接口；认证从 Python cookie 会话切换为 JWT（Authorization header）；Java 新增 SSE 端点推送任务进度 | 浏览器打开 Java 端口即见前端页面；所有 API 调用同源经 Java；JWT 登录 / 刷新 / 登出生效；SSE 进度推送正常 |
+| **8.2 Python 退化为纯 worker** | Python 侧移除 Web 业务路由（auth / tasks / models / credentials / conversations / 前端托管），只保留 `/dispatch`（接收 Java HTTP 调用）+ `/callback`（回调 Java）+ pipeline 执行；凭据加密、平台适配器、转写、LLM 加工、落盘等数据面能力不变；Python 进程由 Java 通过 RabbitMQ 消息触发 | Python 不再直接面向用户；Java dispatch → Python worker → callback → Java 回写 + 审计全链路跑通；Python 可独立启动仅作为 worker |
+| **8.3 生产中间件切换** | 数据库从 H2 / SQLite 切 PostgreSQL（Java + Python 共用同一实例）；Redis 从内存回退切真实实例（限流 + 令牌吊销）；RabbitMQ 从嵌入式切独立实例（编排 + DLQ + Outbox） | docker compose up 启动 PG + Redis + RabbitMQ + Java + Python 五服务；数据重启不丢；限流 / 熔断 / 审计在真实中间件下全绿 |
+| **8.4 一键启动 + 打包（桌面端前身）** | 统一启动脚本：一条命令拉起中间件 + Java 后端 + Python worker；Docker Compose 多服务编排（healthcheck + 依赖顺序 + 资源限制）；`.env` 生产配置模板；备份脚本（PG dump + 卷快照）；可选：非 Docker 的本地打包方案（嵌入式 PG / Redis 替代品或 Greenmail，为桌面端做准备） | `docker compose up -d` 一条命令起全部服务；从零到跑通 ≤ 15 分钟；备份脚本可恢复；非 Docker 方案验证 Java + Python 双进程一键启动可行 |
 
-**执行方式**：8.1 → 8.2 是强依赖顺序（先切路由，再退化数据面）；8.3 可与 8.1 / 8.2 并行准备（Docker Compose 先行）；8.4 在前三步完成后做。
+**执行方式**：8.1 → 8.2 是强依赖顺序（先让 Java 接管前端和 API，再从 Python 移除 Web 路由）；8.3 可与 8.1 / 8.2 并行准备（Docker Compose 先行）；8.4 在前三步完成后做。
 
-**风险**：前端路由切换是侵入性最大的改动——要改前端的 fetch / SSE 逻辑、认证流程（cookie → JWT）、错误处理（新增 429 / 502）。建议先在 Feature Flag 下灰度，保留 `ZHIJI_DIRECT_PYTHON=1` 回退开关，验证通过后再切默认。
+**风险**：前端路由切换是侵入性最大的改动——要改前端的 fetch / SSE 逻辑、认证流程（cookie → JWT）、错误处理（新增 429 / 502）。建议先在 Feature Flag 下灰度，保留 `ZHIJI_DIRECT_PYTHON=1` 回退开关（前端直接连 Python），验证通过后再切默认。
 
-**验收**：一个新用户从注册到生成笔记，全链路经 Java 控制面 → RabbitMQ → Python worker → 回调 → 审计，无 Python 直连路径；`docker compose up -d` 后 15 分钟内可用；PG / Redis / RabbitMQ 重启后数据不丢、限流 / 审计 / 编排正常。
+**桌面端演进路径（阶段 8 之后，不在当前计划内）**：阶段 8 完成后，应用已是一个"一条命令启动的本地 Web 应用"。下一步包成桌面端时，用 Tauri（Rust 壳，体积小）或 Electron（Node 壳，生态熟），桌面壳打开 webview 指向 Java 后端的 localhost 端口，打包时内嵌 JRE + Python 运行时。前端代码和后端代码都不需要改动，只是运行时打包方式的区别。
+
+**验收**：一个新用户从注册到生成笔记，全链路经 Java 后端 → RabbitMQ → Python worker → 回调 → 审计，无 Python 直连路径；`docker compose up -d` 后 15 分钟内可用；PG / Redis / RabbitMQ 重启后数据不丢、限流 / 审计 / 编排正常。
 
 ---
-
 
 ## 6. 执行方式（工作流约定）
 
@@ -580,14 +595,16 @@ Java 只是换一个实现。
 
 **阶段 0–7 已全部完成**（工程底座 → 异步闭环 → 账号隔离 → 凭据安全 → 容器化 → Obsidian → Java 控制面 → 作品集交付）。
 
-**阶段 8（控制面与数据面集成）已写入计划书**，目标是将 Java 控制面与 Python 数据面从并行空转拼成统一产品：
+**阶段 8（本地一体化应用，桌面端前身）已写入计划书**，目标是将 Java 控制面与 Python 数据面拼成一个统一入口的本地 Web 应用：
 
-- 8.1 前端路由从 Python 直连切换到 Java 控制面（JWT 鉴权 + 限流 + RabbitMQ 编排）
-- 8.2 Python 数据面退化为纯 worker（只接收 dispatch + 回调）
-- 8.3 生产中间件切换（PostgreSQL + Redis + RabbitMQ 替换 H2 / SQLite / 内存）
-- 8.4 多服务编排部署 + 反向代理 HTTPS + 备份脚本
+- 8.1 Java 托管前端静态文件 + API，统一入口（认证从 Python cookie 切 JWT）
+- 8.2 Python 退化为纯 worker（移除 Web 路由，只接收 dispatch + 回调）
+- 8.3 生产中间件切换（PostgreSQL + Redis + RabbitMQ）
+- 8.4 一键启动 + 打包（Docker Compose 多服务 + 非 Docker 本地方案验证）
 
-**启动条件**：决定从"自托管工具"迈向"可部署产品"时启动。在此之前，现有 Python 单体已满足自用需求。
+**桌面端演进**：阶段 8 之后，应用已是"一条命令启动的本地 Web 应用"。包成桌面端只需用 Tauri / Electron 壳打开 webview 指向 Java localhost 端口，内嵌 JRE + Python 运行时，前后端代码无需改动。
+
+**启动条件**：决定从"自托管工具"迈向"可打包产品"时启动。
 
 ### 迭代记录
 
