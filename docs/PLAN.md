@@ -618,3 +618,4 @@ ode --check 通过 |
 | 6.5 审计 | ✅ 完成 | audit_log + outbox_event JPA 实体（只增不改）/ AuditService 事务双写（审计记录 + outbox 事件同一事务）/ OutboxPublisher @Scheduled 轮询发布 / TaskDispatchController + TaskCallbackController 审计调用点 / 14 项 AuditTest 全绿（审计记录写入、outbox 事件生成、重复回调幂等、审计不可篡改、回调密钥校验、跨用户审计隔离、审计分页查询）/ 59 项 Java 测试全绿 / mvn test BUILD SUCCESS |
 | 7.1 README 重构 | ✅ 完成 | README 重写：30 秒说清"是什么 / 给谁用 / 一条命令怎么跑"，Mermaid 架构图内嵌，链接 ARCHITECTURE / DEPLOY / PLAN / ADR；恢复被编码损坏的 PLAN.md 并补记 6.5 审计迭代记录 |
 | 7.2 图示 | ✅ 完成 | ARCHITECTURE.md 新增 §5.9：数据流图（控制面 + 数据面完整链路：TaskDispatch → RabbitMQ → Worker → Callback → Audit → Outbox）+ 任务状态机图（pending → running → succeeded/failed/cancelled，终态无出边），Mermaid 内嵌与代码一起版本化 |
+| 7.3 ADR 索引与补录 | ✅ 完成 | docs/adr/ 独立目录：README.md 索引（D1-D12 链接表）+ 12 个独立 ADR 文件，每条含背景 / 备选方案 / 推翻条件，能回答"为什么不用另一种" |
