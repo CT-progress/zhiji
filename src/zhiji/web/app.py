@@ -64,6 +64,8 @@ from zhiji.tasks import TaskContext, TaskWorker, get_worker
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 CONFIG_HTML = STATIC_DIR / "config.html"
+# Vue 3 前端产物目录（frontend/dist），由 `npm run build` 生成
+FRONTEND_DIST = Path(__file__).resolve().parents[3] / "frontend" / "dist"
 
 # 异步生成器轮询队列超时的哨兵值（区别于队列里的 None 结束标记）
 _QUEUE_EMPTY = object()
@@ -452,6 +454,8 @@ def create_app(
         title="知记本地配置", version="0.1.0", docs_url="/docs", lifespan=lifespan
     )
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    if (FRONTEND_DIST / "index.html").exists():
+        app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
 
     # 只有启用「旧版访问令牌」或「账号鉴权」时才挂中间件，本机零配置保持原有开放行为。
     if token or require_auth:
@@ -509,6 +513,9 @@ def create_app(
 
     @app.get("/")
     def index() -> FileResponse:
+        vue_index = FRONTEND_DIST / "index.html"
+        if vue_index.exists():
+            return FileResponse(vue_index)
         return FileResponse(CONFIG_HTML)
 
     @app.post("/api/auth/register")

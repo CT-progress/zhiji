@@ -27,3 +27,6 @@ dist/
 
 # Java / Maven build artifacts
 control-plane/target/
+
+# Frontend
+node_modules/
