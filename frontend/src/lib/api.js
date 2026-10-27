@@ -51,11 +51,12 @@ export async function readSSE(path, options, onEvent) {
   }
 }
 
-export function streamSSE(path, body, onEvent) {
+export function streamSSE(path, body, onEvent, options = {}) {
   return readSSE(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    ...options,
   }, onEvent)
 }
 

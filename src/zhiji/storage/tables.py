@@ -313,3 +313,76 @@ class TodoRow(Base):
 
     def __repr__(self) -> str:
         return f"<TodoRow id={self.id!r} title={self.title!r} done={self.done!r}>"
+
+class KnowledgeLibraryRow(Base):
+    """知识库资料库：按项目或主题组织资料。"""
+
+    __tablename__ = "knowledge_libraries"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, default=None
+    )
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(Text, default="")
+    color: Mapped[str] = mapped_column(String(16), default="accent")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<KnowledgeLibraryRow id={self.id!r} name={self.name!r}>"
+
+
+class KnowledgeDocumentRow(Base):
+    """知识库资料：保留原文、规范化文本与索引状态。"""
+
+    __tablename__ = "knowledge_documents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    library_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_libraries.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, default=None
+    )
+    title: Mapped[str] = mapped_column(String(240))
+    filename: Mapped[str] = mapped_column(String(255))
+    mime_type: Mapped[str] = mapped_column(String(120), default="text/plain")
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    content_text: Mapped[str] = mapped_column(Text, default="")
+    content_markdown: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(20), default="indexed", index=True)
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<KnowledgeDocumentRow id={self.id!r} title={self.title!r}>"
+
+
+class KnowledgeChunkRow(Base):
+    """资料切片：保存检索文本、原文位置和本地哈希向量。"""
+
+    __tablename__ = "knowledge_chunks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("knowledge_documents.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, default=None
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, default=0)
+    text: Mapped[str] = mapped_column(Text)
+    embedding_json: Mapped[str] = mapped_column(Text, default="[]")
+    char_count: Mapped[int] = mapped_column(Integer, default=0)
+    start_offset: Mapped[int] = mapped_column(Integer, default=0)
+    end_offset: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    def __repr__(self) -> str:
+        return f"<KnowledgeChunkRow id={self.id!r} document_id={self.document_id!r}>"

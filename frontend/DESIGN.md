@@ -189,3 +189,38 @@ Playwright + Edge（1280×800 / 390×844）截图验收，均通过：
 - **构建**：`npm run build` 通过，1585 modules transformed，CSS 42.68 kB，JS 147.14 kB（2.19s）。
 
 截图存档：`shot_notes_desktop_final.png` / `shot_notes_mobile_final.png` / `shot_notes_desktop_todos.png` / `shot_notes_mobile_todos.png`。
+
+---
+
+## Workspace 03: Knowledge Base (Phase C)
+
+### Desktop: archive / paper / retrieval rail
+- **Library and document rail** — numbered libraries, per-library document index, import affordance and global stats. The left rail is an archive rather than a card list.
+- **Reading canvas** — full source text rendered as a paper-like surface, with document metadata, reading progress, retrieval-hit highlighting and chunk navigation.
+- **Retrieval rail** — full-text search, cited snippets and a streaming answer track. It can collapse to give the source document the full canvas.
+- Search and answers can be scoped to the current library or all libraries. Clicking a result, source card or inline citation opens the original document at the matched range.
+
+### Mobile: three-page state machine
+- Below `920px`, the workspace exposes `资料库 / 阅读 / 检索问答` as three full-width tabs. Selecting a result transitions to the reader; `Alt+1/2/3` switches pages.
+- The retrieval rail becomes a dedicated page instead of a squeezed side panel. All pages respect the dock safe area.
+
+### Interaction contract
+- Import supports TXT, Markdown, CSV, JSON and HTML with file picker or drag-and-drop; unsupported PDF/Office files return an explicit message.
+- Library creation and two-step deletion use the same quiet affordance pattern as notes. Document rename and deletion live in the reader header.
+- Search highlights the matched source range; citations use `[n]` tokens and source cards as two routes back to the source.
+- Questions stream through SSE with a visible stop action. The retrieval threshold prevents unrelated questions from silently becoming model calls.
+- `/` focuses search; `Ctrl+Enter` submits a question; all libraries, documents and chunks are isolated by user scope.
+
+### Retrieval and storage
+- Tables: `knowledge_libraries`, `knowledge_documents`, `knowledge_chunks`.
+- Indexing uses Chinese bigram tokenization plus a deterministic hash-vector blend, with a relevance cutoff.
+- The API exposes library/document CRUD, text import, scoped search, stats and SSE question answering.
+
+## C3 验收记录（2026-10-27 · 工作区③ 知识库）
+
+- **后端测试**：知识库、笔记、鉴权门禁与跨用户隔离共 `28 passed`；Ruff `All checks passed!`。
+- **前端构建**：`npm run build` 通过，1586 modules transformed，CSS 68.78 kB，JS 178.95 kB（1.89s）。
+- **首页入口**：知识库已从占位瓦片切换为真实统计入口，显示资料库、资料、切片与字符数。
+- **响应式空状态**：已在本地服务中检查知识库空状态和三页签布局，资料库与资料索引分区正常，无卡片平铺回归。
+- **服务**：当前代码已由 FastAPI 在 `http://127.0.0.1:8000` 托管。
+- **截图存档**：`shot_knowledge_home_desktop.png`（当前为窄屏响应式截图，文件名沿用验收记录）。
