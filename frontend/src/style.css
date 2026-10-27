@@ -447,7 +447,7 @@ a:hover { color: var(--accent-hover); }
 .search-empty { color: var(--muted); font-size: var(--fs-sm); padding: var(--sp-3) var(--sp-2); }
 
 /* ---- Toast ---- */
-#toast { position: fixed; left: 50%; bottom: var(--sp-6); transform: translateX(-50%); background: var(--surface-2); border: 1px solid var(--border); color: var(--text); padding: var(--sp-3) var(--sp-4); border-radius: var(--r-md); display: none; z-index: 60; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); max-width: 80vw; font-size: var(--fs-sm); }
+#toast { position: fixed; left: 50%; bottom: calc(var(--dock-h) + var(--sp-3)); transform: translateX(-50%); background: var(--surface-2); border: 1px solid var(--border); color: var(--text); padding: var(--sp-3) var(--sp-4); border-radius: var(--r-md); display: none; z-index: 60; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); max-width: 80vw; font-size: var(--fs-sm); }
 .hidden { display: none !important; }
 
 /* ---- Auth page ---- */
@@ -475,6 +475,192 @@ a:hover { color: var(--accent-hover); }
 .logout-btn { flex: none; padding: 2px var(--sp-2); border: 1px solid var(--border); border-radius: var(--r-sm); background: transparent; color: var(--muted); font-size: var(--fs-2xs); transition: border-color var(--t-fast), color var(--t-fast); }
 .logout-btn:hover { border-color: var(--accent); color: var(--accent); }
 
+
+/* ============================================================
+   Notes & Todos Workspace (Phase C · Workspace 02)
+   ============================================================ */
+.notes-ws {
+  flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column;
+  background: var(--bg);
+}
+.notes-topbar {
+  flex: none; height: var(--topbar-h); display: flex; align-items: center; gap: var(--sp-3);
+  padding: 0 var(--sp-4); border-bottom: 1px solid var(--border-soft);
+  background: rgba(18, 18, 18, 0.72);
+}
+.notes-topbar .icon-btn { flex: none; }
+.notes-topbar-title { min-width: 0; display: flex; align-items: baseline; gap: var(--sp-3); }
+.notes-eyebrow, .notes-label {
+  font: 700 10px/1 Consolas, "Courier New", monospace;
+  letter-spacing: 0.12em; color: var(--faint); white-space: nowrap;
+}
+.notes-topbar-title h1 { margin: 0; font-size: var(--fs-base); font-weight: 650; white-space: nowrap; }
+.notes-topbar-counts { display: flex; align-items: center; gap: var(--sp-3); margin-left: var(--sp-3); color: var(--muted); font-size: var(--fs-xs); }
+.notes-topbar-counts span { display: flex; align-items: baseline; gap: var(--sp-1); }
+.notes-topbar-counts strong { color: var(--text); font: 600 var(--fs-sm)/1 Consolas, "Courier New", monospace; }
+.notes-topbar-status { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); color: var(--muted); font-size: var(--fs-xs); white-space: nowrap; }
+.notes-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+.notes-topbar-status.saved { color: var(--muted); }
+.notes-topbar-status.saved .notes-status-dot { background: var(--accent); }
+.notes-topbar-status.dirty { color: var(--warn); }
+.notes-topbar-status.dirty .notes-status-dot { background: var(--warn); }
+.notes-topbar-status.saving { color: var(--info); }
+.notes-topbar-status.saving .notes-status-dot { background: var(--info); animation: notes-pulse 1s ease infinite; }
+.notes-save-btn {
+  height: 30px; display: flex; align-items: center; gap: var(--sp-2);
+  padding: 0 var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--text); font-size: var(--fs-xs);
+  transition: border-color var(--t-fast), color var(--t-fast), opacity var(--t-fast);
+}
+.notes-save-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.notes-save-btn:disabled { opacity: 0.38; cursor: default; }
+@keyframes notes-pulse { 50% { opacity: 0.3; } }
+
+.notes-ws-body {
+  flex: 1; min-height: 0; display: grid;
+  grid-template-columns: 250px minmax(0, 1fr) 304px;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4) calc(var(--dock-h) + var(--sp-5));
+  overflow: hidden;
+}
+.notes-panel {
+  min-width: 0; min-height: 0; display: flex; flex-direction: column;
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--panel); overflow: hidden;
+}
+.notes-library { background: var(--sidebar); }
+.notes-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-2); }
+.notes-panel-head h2 { margin: 3px 0 0; font-size: var(--fs-lg); font-weight: 650; line-height: 1.25; }
+.notes-count {
+  min-width: 24px; height: 24px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  color: var(--muted); font: 600 var(--fs-2xs)/1 Consolas, "Courier New", monospace;
+}
+.notes-library > .notes-panel-head, .notes-todo-head > .notes-panel-head { padding: var(--sp-4) var(--sp-4) 0; }
+
+.notes-search { flex: none; display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-3) var(--sp-3) var(--sp-2); height: 34px; padding: 0 var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--input); color: var(--faint); transition: border-color var(--t-fast); }
+.notes-search:focus-within { border-color: var(--accent); }
+.notes-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: var(--fs-xs); }
+.notes-search input::placeholder { color: var(--faint); }
+.notes-search button { flex: none; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; border-radius: var(--r-xs); color: var(--faint); }
+.notes-search button:hover { background: var(--surface-2); color: var(--text); }
+
+.notes-new-btn { flex: none; height: 36px; margin: 0 var(--sp-3) var(--sp-3); padding: 0 var(--sp-3); display: flex; align-items: center; gap: var(--sp-2); border: 1px solid rgba(16, 163, 127, 0.45); border-radius: var(--r-sm); background: var(--accent-soft); color: var(--accent); font-size: var(--fs-sm); font-weight: 650; transition: background var(--t-fast), border-color var(--t-fast); }
+.notes-new-btn:hover { background: rgba(16, 163, 127, 0.22); border-color: var(--accent); }
+.notes-new-btn span { flex: 1; text-align: left; }
+.notes-new-btn kbd { padding: 1px 4px; border: 1px solid rgba(16, 163, 127, 0.3); border-radius: var(--r-xs); color: var(--accent); font: 10px/1 Consolas, "Courier New", monospace; opacity: 0.7; }
+
+.notes-index-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 var(--sp-2) var(--sp-2); }
+.notes-group-head { display: flex; align-items: center; justify-content: space-between; padding: var(--sp-3) var(--sp-2) var(--sp-1); color: var(--faint); font-size: var(--fs-2xs); }
+.notes-group-head > span:first-child { display: flex; align-items: center; gap: var(--sp-1); }
+.notes-group-head > span:last-child { font-family: Consolas, "Courier New", monospace; }
+.notes-index-item {
+  width: 100%; display: flex; align-items: flex-start; gap: var(--sp-2);
+  padding: var(--sp-2); border: 1px solid transparent; border-radius: var(--r-sm);
+  text-align: left; color: var(--muted); transition: background var(--t-fast), border-color var(--t-fast);
+}
+.notes-index-item:hover { background: var(--surface); color: var(--text); }
+.notes-index-item.active { background: var(--surface); border-color: var(--border); color: var(--text); }
+.notes-index-no { flex: none; width: 20px; padding-top: 2px; color: var(--faint); font: 10px/1.4 Consolas, "Courier New", monospace; }
+.notes-index-item.active .notes-index-no { color: var(--accent); }
+.notes-index-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.notes-index-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); font-weight: 600; }
+.notes-index-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font-size: var(--fs-2xs); }
+.notes-index-pin { flex: none; margin-top: 3px; color: var(--accent); }
+.notes-index-chevron { flex: none; margin-top: 3px; color: var(--faint); opacity: 0; transition: opacity var(--t-fast), transform var(--t-fast); }
+.notes-index-item:hover .notes-index-chevron { opacity: 1; transform: translateX(2px); }
+.notes-list-empty { display: flex; flex-direction: column; align-items: center; gap: var(--sp-1); padding: var(--sp-8) var(--sp-3); color: var(--faint); text-align: center; }
+.notes-list-empty span { color: var(--muted); font-size: var(--fs-sm); }
+.notes-list-empty small { font-size: var(--fs-2xs); }
+.notes-loading { padding: var(--sp-6) var(--sp-3); color: var(--muted); font-size: var(--fs-xs); text-align: center; }
+.notes-library-foot, .notes-todo-foot { flex: none; min-height: 32px; display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-4); border-top: 1px solid var(--border-soft); color: var(--faint); font-size: var(--fs-2xs); white-space: nowrap; }
+.notes-foot-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+.notes-foot-spacer { flex: 1; }
+
+.notes-editor { background: #191919; }
+.notes-editor-top { flex: none; display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-4) var(--sp-6) var(--sp-1); }
+.notes-editor-path { display: flex; align-items: center; gap: var(--sp-2); color: var(--faint); font: 600 10px/1 Consolas, "Courier New", monospace; letter-spacing: 0.1em; }
+.notes-editor-actions { display: flex; align-items: center; gap: var(--sp-1); }
+.notes-icon-action { height: 28px; display: flex; align-items: center; gap: var(--sp-1); padding: 0 var(--sp-2); border-radius: var(--r-sm); color: var(--faint); font-size: var(--fs-2xs); transition: background var(--t-fast), color var(--t-fast); }
+.notes-icon-action:hover { background: var(--surface); color: var(--text); }
+.notes-icon-action.active { background: var(--accent-soft); color: var(--accent); }
+.notes-icon-action.danger:hover, .notes-icon-action.armed { background: rgba(239, 68, 68, 0.12); color: var(--danger); }
+
+.notes-title-input {
+  flex: none; width: 100%; margin: 0; padding: var(--sp-2) var(--sp-6) 0;
+  border: 0; outline: 0; background: transparent; color: var(--text);
+  font-size: 24px; line-height: 1.35; font-weight: 720;
+}
+.notes-title-input::placeholder { color: var(--faint); }
+.notes-tags-row { flex: none; min-height: 36px; display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1); padding: var(--sp-1) var(--sp-6) var(--sp-3); border-bottom: 1px solid var(--border-soft); }
+.notes-tag { display: inline-flex; align-items: center; gap: 3px; height: 23px; padding: 0 var(--sp-2); border: 1px solid rgba(91, 141, 239, 0.24); border-radius: var(--r-xs); background: var(--info-soft); color: #9db8f5; font-size: var(--fs-2xs); }
+.notes-tag button { display: flex; align-items: center; justify-content: center; color: inherit; opacity: 0.6; }
+.notes-tag button:hover { opacity: 1; }
+.notes-tag-input { min-width: 90px; width: 100px; height: 23px; padding: 0 var(--sp-1); border: 0; outline: 0; background: transparent; color: var(--text); font-size: var(--fs-2xs); }
+.notes-tag-input::placeholder { color: var(--faint); }
+.notes-content-input {
+  flex: 1; min-height: 0; width: 100%; padding: var(--sp-4) var(--sp-6);
+  border: 0; outline: 0; resize: none; background: transparent; color: var(--text);
+  font-size: var(--fs-base); line-height: 1.82;
+}
+.notes-content-input::placeholder { color: var(--faint); }
+.notes-editor-foot { flex: none; min-height: 36px; display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-6); border-top: 1px solid var(--border-soft); color: var(--faint); font-size: var(--fs-2xs); white-space: nowrap; }
+.notes-foot-sep { width: 1px; height: 12px; background: var(--border); }
+.notes-editor-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sp-3); padding: var(--sp-8); text-align: center; color: var(--muted); }
+.notes-editor-empty .notes-empty-mark { width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); color: var(--accent); font-size: var(--fs-xl); font-weight: 700; }
+.notes-editor-empty h2 { margin: 0; color: var(--text); font-size: var(--fs-xl); }
+.notes-editor-empty p { margin: 0; font-size: var(--fs-sm); }
+
+.notes-todo-head { flex: none; padding-bottom: var(--sp-3); border-bottom: 1px solid var(--border-soft); }
+.notes-progress-track { height: 3px; margin: var(--sp-3) var(--sp-4) var(--sp-2); overflow: hidden; background: var(--surface-2); border-radius: 2px; }
+.notes-progress-track span { display: block; height: 100%; background: var(--accent); transition: width var(--t-slow); }
+.notes-progress-copy { display: flex; justify-content: space-between; padding: 0 var(--sp-4); color: var(--faint); font-size: var(--fs-2xs); }
+.notes-progress-copy strong { color: var(--muted); font: 600 var(--fs-2xs)/1 Consolas, "Courier New", monospace; }
+.notes-todo-form { flex: none; padding: var(--sp-3) var(--sp-3) var(--sp-2); border-bottom: 1px solid var(--border-soft); }
+.notes-todo-input-row { display: flex; gap: var(--sp-1); }
+.notes-todo-input-row input { flex: 1; min-width: 0; height: 34px; padding: 0 var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-sm); outline: 0; background: var(--input); font-size: var(--fs-sm); transition: border-color var(--t-fast); }
+.notes-todo-input-row input:focus { border-color: var(--accent); }
+.notes-todo-input-row button { flex: none; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; border-radius: var(--r-sm); background: var(--accent); color: #fff; transition: background var(--t-fast), opacity var(--t-fast); }
+.notes-todo-input-row button:hover:not(:disabled) { background: var(--accent-hover); }
+.notes-todo-input-row button:disabled { opacity: 0.35; cursor: not-allowed; }
+.notes-todo-controls { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
+.notes-select-wrap, .notes-date-wrap { height: 26px; display: flex; align-items: center; gap: var(--sp-1); padding: 0 var(--sp-2); border: 1px solid var(--border-soft); border-radius: var(--r-xs); color: var(--faint); font-size: var(--fs-2xs); }
+.notes-select-wrap select, .notes-date-wrap input { min-width: 0; border: 0; outline: 0; background: transparent; color: var(--muted); font-size: var(--fs-2xs); }
+.notes-date-wrap { flex: 1; }
+.notes-date-wrap input { width: 100%; color-scheme: dark; }
+.notes-select-wrap select { cursor: pointer; }
+.priority-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--faint); }
+.priority-dot.p0 { background: var(--faint); }
+.priority-dot.p1 { background: var(--info); }
+.priority-dot.p2 { background: var(--warn); }
+.notes-link-toggle { display: inline-flex; align-items: center; gap: var(--sp-1); margin-top: var(--sp-2); padding: 0; color: var(--faint); font-size: var(--fs-2xs); }
+.notes-link-toggle:hover, .notes-link-toggle.active { color: var(--accent); }
+.notes-todo-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 var(--sp-2); }
+.notes-group-head.todo { padding-top: var(--sp-3); }
+.notes-group-head.todo.done { margin-top: var(--sp-2); border-top: 1px solid var(--border-soft); }
+.notes-todo-item { display: flex; align-items: flex-start; gap: var(--sp-2); padding: var(--sp-2); border: 1px solid transparent; border-radius: var(--r-sm); transition: background var(--t-fast), opacity var(--t-fast); }
+.notes-todo-item:hover { background: var(--surface); }
+.notes-todo-item.busy { opacity: 0.5; pointer-events: none; }
+.notes-check { flex: none; width: 16px; height: 16px; margin-top: 2px; border: 1px solid var(--faint); border-radius: 4px; transition: border-color var(--t-fast), background var(--t-fast); }
+.notes-check:hover { border-color: var(--accent); }
+.notes-check.checked { display: flex; align-items: center; justify-content: center; border-color: var(--accent); background: var(--accent); color: #fff; }
+.notes-todo-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.notes-todo-copy > strong { font-size: var(--fs-sm); line-height: 1.45; font-weight: 500; overflow-wrap: anywhere; }
+.notes-todo-meta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); min-height: 13px; color: var(--faint); font-size: var(--fs-2xs); }
+.notes-due { font-family: Consolas, "Courier New", monospace; }
+.notes-due.overdue { color: var(--danger); }
+.notes-todo-link { min-width: 0; display: inline-flex; align-items: center; gap: 3px; color: var(--faint); font-size: var(--fs-2xs); }
+.notes-todo-link:hover { color: var(--info); }
+.notes-todo-delete { flex: none; width: 21px; height: 21px; display: flex; align-items: center; justify-content: center; border-radius: var(--r-xs); color: var(--faint); opacity: 0; transition: opacity var(--t-fast), background var(--t-fast), color var(--t-fast); }
+.notes-todo-item:hover .notes-todo-delete, .notes-todo-delete:focus-visible { opacity: 1; }
+.notes-todo-delete:hover { background: rgba(239, 68, 68, 0.12); color: var(--danger); }
+.notes-todo-item.done .notes-todo-copy > strong { color: var(--faint); text-decoration: line-through; }
+.notes-todo-empty { display: flex; flex-direction: column; align-items: center; gap: var(--sp-1); padding: var(--sp-8) var(--sp-3); color: var(--faint); text-align: center; font-size: var(--fs-sm); }
+.notes-todo-empty small { font-size: var(--fs-2xs); }
+.notes-todo-foot { margin-top: auto; }
+
+.notes-mobile-nav { display: none; }
+
 /* ---- Responsive ---- */
 @media (max-width: 760px) {
   .bento { grid-template-columns: 1fr 1fr; grid-template-rows: auto; grid-template-areas: "video video" "notes knowledge" "docs media"; }
@@ -494,4 +680,51 @@ a:hover { color: var(--accent-hover); }
 @media (max-width: 520px) {
   .auth-card { padding: var(--sp-5) var(--sp-4); }
   .form-row { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 1100px) and (min-width: 921px) {
+  .notes-ws-body { grid-template-columns: 220px minmax(0, 1fr) 270px; }
+  .notes-topbar-counts { display: none; }
+}
+@media (max-width: 920px) {
+  .notes-topbar { gap: var(--sp-2); padding: 0 var(--sp-3); }
+  .notes-topbar-status { margin-left: auto; }
+  .notes-save-btn span { display: none; }
+  .notes-save-btn { width: 30px; padding: 0; justify-content: center; }
+  .notes-mobile-nav {
+    flex: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-1);
+    padding: var(--sp-2) var(--sp-3) 0; background: var(--bg);
+  }
+  .notes-mobile-nav button {
+    height: 34px; display: flex; align-items: center; justify-content: center; gap: var(--sp-1);
+    border: 1px solid transparent; border-radius: var(--r-sm);
+    color: var(--muted); font-size: var(--fs-xs);
+  }
+  .notes-mobile-nav button span { color: var(--faint); font: 10px/1 Consolas, "Courier New", monospace; }
+  .notes-mobile-nav button:hover { background: var(--surface); color: var(--text); }
+  .notes-mobile-nav button.active { border-color: var(--border); background: var(--surface); color: var(--text); }
+  .notes-ws-body {
+    display: block; padding: var(--sp-2) var(--sp-3) calc(var(--dock-h) + var(--sp-4));
+  }
+  .notes-panel { display: none; height: 100%; }
+  .notes-ws[data-pane="library"] .notes-library,
+  .notes-ws[data-pane="editor"] .notes-editor,
+  .notes-ws[data-pane="todos"] .notes-todo-rail { display: flex; }
+  .notes-title-input { padding-left: var(--sp-5); padding-right: var(--sp-5); }
+  .notes-tags-row { padding-left: var(--sp-5); padding-right: var(--sp-5); }
+  .notes-content-input { padding-left: var(--sp-5); padding-right: var(--sp-5); }
+  .notes-editor-foot { padding-left: var(--sp-5); padding-right: var(--sp-5); }
+}
+@media (max-width: 520px) {
+  .notes-topbar { height: 48px; }
+  .notes-topbar-title { display: block; }
+  .notes-eyebrow { display: none; }
+  .notes-topbar-title h1 { font-size: var(--fs-sm); }
+  .notes-topbar-status { font-size: var(--fs-2xs); }
+  .notes-title-input { padding-top: var(--sp-1); font-size: 20px; }
+  .notes-editor-top { padding: var(--sp-3) var(--sp-5) 0; }
+  .notes-editor-foot { gap: var(--sp-1); font-size: 10px; }
+  .notes-editor-foot > span:nth-child(3) { overflow: hidden; text-overflow: ellipsis; }
+  .notes-todo-controls { flex-wrap: wrap; }
+  .notes-date-wrap { min-width: 130px; }
 }

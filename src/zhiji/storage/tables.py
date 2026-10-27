@@ -266,3 +266,50 @@ class AppSettingsRow(Base):
 
     def __repr__(self) -> str:
         return f"<AppSettingsRow id={self.id!r} output_dir={self.output_dir!r}>"
+
+
+class NoteRow(Base):
+    """笔记表：独立于会话的纯文本笔记，支持标签和置顶。"""
+
+    __tablename__ = "notes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, default=None
+    )
+    title: Mapped[str] = mapped_column(String(200), default="无标题")
+    content: Mapped[str] = mapped_column(Text, default="")
+    tags: Mapped[str] = mapped_column(String(500), default="")
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, index=True
+    )
+
+    def __repr__(self) -> str:
+        return f"<NoteRow id={self.id!r} title={self.title!r}>"
+
+
+class TodoRow(Base):
+    """待办表：可关联笔记，支持优先级和截止日期。"""
+
+    __tablename__ = "todos"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, default=None
+    )
+    title: Mapped[str] = mapped_column(String(200))
+    done: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+    due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    note_id: Mapped[str | None] = mapped_column(
+        ForeignKey("notes.id", ondelete="SET NULL"), default=None, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<TodoRow id={self.id!r} title={self.title!r} done={self.done!r}>"

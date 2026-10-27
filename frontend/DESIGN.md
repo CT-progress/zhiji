@@ -94,7 +94,7 @@ Replaced the generic 3-column icon-rail + sidebar + main shell with a **bento ho
 - **`.shell`** — full-height flex column (`shell-top` brand bar + `shell-main` content area).
 - **`.shell-top`** — 52px brand bar: logo + health + user (home only, hidden in focus mode).
 - **`.bento`** — CSS grid, 4 columns × 2 rows, grid-template-areas:
-  `"video notes knowledge" / "video docs media"`. The video tile spans 2 rows (live workspace); the other 4 are "soon" tiles with feature chips.
+  `"video notes knowledge" / "video docs media"`. The video tile spans 2 rows (live workspace); notes is now live with counts; the remaining 3 are "soon" tiles with feature chips.
 - **`.bento-tile`** — bordered panel tile, hover = accent border + surface bg, active press = slight scale.
 
 ### Navigation: Dot Dock
@@ -111,6 +111,33 @@ Replaced the generic 3-column icon-rail + sidebar + main shell with a **bento ho
 - **`.conv-drawer`** — off-canvas left drawer (`position:absolute; transform:translateX(-100%)`), slides in with `.open` class.
 - **`.drawer-scrim`** — semi-transparent overlay, click to close.
 - Contains brand header, new-chat button, search, conversation list, model mini.
+
+## Workspace 02: Notes & Todos (Phase C)
+
+### Desktop: three-pane workbench
+- **Library rail (`250px`)** — searchable note index grouped into pinned / all notes, with a compact new-note action and local-save footer.
+- **Editor canvas (`minmax(0, 1fr)`)** — borderless writing surface between the two rails, with title, tags, plain-text body, character count, save state and timestamp.
+- **Todo flow (`304px`)** — capture form (priority / due date / optional note link), completion progress, open/done groups and per-item delete.
+- The three panels use the shared border, panel and surface tokens instead of nested cards. At `1100px` the side rails narrow to `220px / 270px`.
+
+### Mobile: one-pane state machine
+- Below `920px`, `.notes-ws[data-pane]` exposes one of three stacked views: `library`, `editor`, `todos`.
+- A three-button mobile nav keeps counts visible. The default pane is the note library; selecting or creating a note transitions to the editor.
+- All panes respect the dock safe area and never introduce horizontal scrolling.
+
+### Interaction contract
+- Notes autosave after `700ms`; `Ctrl+S` flushes immediately and `N` creates a note when focus is outside an input.
+- Switching/deleting first flushes pending edits. Delete requires a second click with a visible `确认删除` label.
+- Todos support priority, due-date urgency, note association, toggle completion and a live completion bar. Deleting a note keeps its todos and clears `note_id` via `SET NULL`.
+- Save state uses the existing info / warn / accent colors. Toasts sit above the dock instead of covering it.
+
+### Added components
+- **Note index row**: sequence number + title/excerpt, selected and pinned states.
+- **Save status**: dot + text state machine (`保存中` / `有未保存修改` / `所有修改已保存`).
+- **Tag chip**: compact removable token; enter or blur commits the tag input.
+- **Two-step delete action**: idle icon expands into a danger confirmation label.
+- **Todo row**: checkbox, priority dot, due label, linked-note jump and hover-only delete.
+- **Todo progress bar**: thin accent track above the open/done list.
 
 ## Component Inventory
 
@@ -146,3 +173,19 @@ Playwright + Chrome（1280×800）截图验收，均通过：
 
 截图存档：`shot_home.png` / `shot_video_focus.png` / `shot_drawer_open.png` / `shot_after_esc.png`。
 设计判断方法参考 design-taste-frontend 的 dial（DESIGN_VARIANCE 5 / MOTION_INTENSITY 3 / VISUAL_DENSITY 5），调性锚点见开头 North Star。
+
+---
+
+## C2 验收记录（2026-10-27 · 工作区② 笔记与待办）
+
+Playwright + Edge（1280×800 / 390×844）截图验收，均通过：
+
+- **桌面三栏**：笔记索引 `250px` / 编辑器自适应 / 待办流 `304px`，边框、间距与保存状态正常。
+- **移动三页签**：笔记 / 编辑 / 待办单页切换，默认进入笔记列表，选中笔记后进入编辑器；无横向溢出。
+- **笔记 CRUD**：新建、标题/正文/标签输入、700ms 自动保存、`Ctrl+S` 手动保存、置顶、两段式删除均通过。
+- **待办 CRUD**：创建（优先级 / 截止日期 / 关联笔记）、完成切换、进度条更新、删除均通过；删除笔记后关联待办保留并断开 `note_id`。
+- **快捷操作**：`N` 新建仅在非输入焦点生效；切换或删除前会先 flush 未落盘内容。
+- **控制台与布局**：零报错；桌面和移动均无横向滚动；Toast 位于 Dock 上方，不遮挡操作区。
+- **构建**：`npm run build` 通过，1585 modules transformed，CSS 42.68 kB，JS 147.14 kB（2.19s）。
+
+截图存档：`shot_notes_desktop_final.png` / `shot_notes_mobile_final.png` / `shot_notes_desktop_todos.png` / `shot_notes_mobile_todos.png`。

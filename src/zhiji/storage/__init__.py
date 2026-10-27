@@ -13,6 +13,7 @@ from zhiji.storage.db import (
     lock_for_key,
     reset_database,
 )
+from zhiji.storage.note_repository import NoteRepository, TodoRepository
 from zhiji.storage.platform_credential_repository import PlatformCredentialRepository
 from zhiji.storage.repository import TERMINAL_STATUSES, TaskRepository
 from zhiji.storage.tables import (
@@ -27,8 +28,10 @@ from zhiji.storage.tables import (
     ConversationRow,
     LLMCredentialRow,
     ModelConfigRow,
+    NoteRow,
     PlatformCredentialRow,
     TaskRow,
+    TodoRow,
     UserRow,
 )
 from zhiji.storage.user_repository import UserRepository
@@ -50,10 +53,14 @@ __all__ = [
     "Database",
     "LLMCredentialRow",
     "ModelConfigRow",
+    "NoteRepository",
+    "NoteRow",
     "PlatformCredentialRepository",
     "PlatformCredentialRow",
     "TaskRepository",
     "TaskRow",
+    "TodoRepository",
+    "TodoRow",
     "UserRepository",
     "UserRow",
     "create_database_engine",

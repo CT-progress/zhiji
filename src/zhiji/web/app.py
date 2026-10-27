@@ -61,6 +61,7 @@ from zhiji.storage import TaskRepository
 from zhiji.storage.scope import ANY_USER, UserScope
 from zhiji.storage.tables import TaskRow, UserRow
 from zhiji.tasks import TaskContext, TaskWorker, get_worker
+from zhiji.web.notes_api import create_notes_router
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 CONFIG_HTML = STATIC_DIR / "config.html"
@@ -1207,6 +1208,9 @@ def create_app(
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    # ---- 笔记与待办 API（阶段 C · 工作区②）-------------------------------
+    app.include_router(create_notes_router(auth_database, _scope_user))
 
     return app
 
