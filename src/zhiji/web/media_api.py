@@ -6,7 +6,7 @@ import json
 import re
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -544,7 +544,7 @@ def create_media_router(
             )
 
         worker = resolve_worker()
-        payload = {"media_id": media_id}
+        payload: dict[str, Any] = {"media_id": media_id}
         if body.action == "trim":
             payload.update({"start_ms": body.start_ms, "end_ms": body.end_ms})
         try:
@@ -561,10 +561,10 @@ def create_media_router(
             raise
         with database.session_scope() as session:
             row = TaskRepository(session).get(task_id, user_id=user_id)
-            media = MediaRepository(session).get(media_id, user_id=user_id)
+            fresh_media = MediaRepository(session).get(media_id, user_id=user_id)
             return {
                 "task": _task_public(row),
-                "media": media_to_dict(media) if media is not None else None,
+                "media": media_to_dict(fresh_media) if fresh_media is not None else None,
             }
 
     return router

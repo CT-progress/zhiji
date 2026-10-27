@@ -145,6 +145,48 @@ def test_default_mode_remains_open(tmp_path: Path) -> None:
     assert client.get(STATUS).json() == {"require_auth": False, "user": None}
 
 
+def test_note_save_files_are_isolated_by_user(tmp_path: Path) -> None:
+    client = _client(tmp_path, require_auth=True)
+    output = tmp_path / "output"
+
+    alice = client.post(
+        "/api/auth/register", json={"username": "alice", "password": PASSWORD}
+    )
+    assert alice.status_code == 200
+    alice_login = client.post(
+        "/api/auth/login", json={"username": "alice", "password": PASSWORD}
+    )
+    alice_id = alice_login.json()["user"]["id"]
+    assert client.put("/api/settings", json={"output_dir": str(output)}).status_code == 200
+    saved = client.post(
+        "/api/note/save", json={"title": "alice-private", "content": "# Alice\n"}
+    )
+    assert saved.status_code == 200
+    alice_path = Path(saved.json()["path"])
+    assert alice_path.parent == output / "notes" / alice_id
+
+    bob = client.post(
+        "/api/auth/register", json={"username": "bob", "password": PASSWORD}
+    )
+    assert bob.status_code == 200
+    bob_login = client.post(
+        "/api/auth/login", json={"username": "bob", "password": PASSWORD}
+    )
+    bob_id = bob_login.json()["user"]["id"]
+    overwrite = client.post(
+        "/api/note/save",
+        json={"path": str(alice_path), "content": "# Bob overwrote this\n"},
+    )
+    assert overwrite.status_code == 404
+    assert alice_path.read_text(encoding="utf-8") == "# Alice\n"
+
+    bob_saved = client.post(
+        "/api/note/save", json={"title": "bob-private", "content": "# Bob\n"}
+    )
+    assert bob_saved.status_code == 200
+    assert Path(bob_saved.json()["path"]).parent == output / "notes" / bob_id
+
+
 # ---------- 旧版令牌兼容 ----------
 
 

@@ -4,6 +4,8 @@
 
 Java 控制面（Spring Boot）负责鉴权、配额、编排、审计；Python 数据面负责平台适配、转写、LLM 加工。一条 `docker compose up` 即可启动。
 
+> **v0.1.0 交付口径**：桌面浏览器工作台、自托管单机部署。手机端适配不属于本版本交付项；SaaS 多租户、计费与运营后台不在本版本验收范围。
+
 ```mermaid
 graph LR
   subgraph Control["Java 控制面 (Spring Boot)"]
@@ -39,7 +41,7 @@ graph LR
 ## 功能特性
 
 - **四平台链路**：抖音（API + Playwright 音频拦截）、B 站（官方字幕优先 + Whisper 兜底 + WBI 签名搜索）、知乎（x-zse-96 签名 + 官方 API 全文）、小红书（图文 / 视频笔记解析）
-- **Vue 工作台**：Bento 首页 + Dot Dock + 专注式工作区，桌面 / 移动响应式；FastAPI 托管 `frontend/dist/`
+- **Vue 桌面工作台**：Bento 首页 + Dot Dock + 专注式工作区；面向 1280×800 及以上桌面浏览器，窄屏仅保留基础布局兜底。FastAPI 托管 `frontend/dist/`
 - **视频解析工作区**：粘贴链接 → 流式生成笔记 → 继续追问 / 修改；SSE 实时进度
 - **笔记与待办**：笔记 CRUD、标签、置顶、自动保存；待办优先级、截止日期与关联笔记
 - **本地知识库**：资料库 / 文本导入 / 原文阅读 / 混合检索 / 引用片段 / SSE 资料问答
@@ -48,7 +50,7 @@ graph LR
 - **异步任务闭环**：提交即返回 taskId，后台执行，可查询状态、取消、失败重试
 - **多用户隔离**：注册 / 登录 / 登出，数据按用户严格隔离
 - **凭据安全**：LLM Key 与平台 Cookie 全部 AES-256-GCM 加密入库，界面只显示掩码
-- **Java 控制面**：Spring Security JWT 资源服务器、Redis 令牌桶限流、Resilience4j 熔断、RabbitMQ 异步编排（重试 / DLQ / 幂等）、Micrometer + Prometheus 指标、审计日志 + Outbox 事件
+- **Java 控制面（v0.1.0 预留能力）**：Spring Security JWT 资源服务器、Redis 令牌桶限流、Resilience4j 熔断、RabbitMQ 异步编排（重试 / DLQ / 幂等）、Micrometer + Prometheus 指标、审计日志 + Outbox 事件
 - **容器化部署**：多阶段 Dockerfile + Docker Compose 一键启动
 - **Obsidian 接入**：笔记按 `zhiji_id` 幂等 upsert，输出目录可指向 vault
 
@@ -56,7 +58,7 @@ graph LR
 
 ## 快速开始
 
-### Docker Compose（后端部署）
+### Docker Compose（含 Vue 工作台）
 
 ```powershell
 git clone <repo-url> && cd zhiji
@@ -65,11 +67,11 @@ docker compose up -d
 # 浏览器打开 http://127.0.0.1:8000，首次访问注册账号
 ```
 
-> 当前 Docker 镜像尚未内置 `frontend/` 的 Vue 构建产物，容器入口仍使用兼容静态页。要体验 Vue 工作台，请优先使用下方“本机开发”。
+> 镜像构建阶段会自动执行 `npm ci` 与 `npm run build`，并把 `frontend/dist/` 拷入运行镜像；容器启动后直接托管 Vue 工作台，不再回退到兼容静态页。
 
 ### 本机开发（推荐体验 Vue 工作台）
 
-需要 Python 3.11+、Node.js 18+。一键脚本（首次运行自动创建 venv、安装依赖、迁移数据库；当前不含 Vue 构建）：
+需要 Python 3.11+、Node.js 18+。一键脚本会创建 venv、安装依赖、构建 Vue 工作台、迁移数据库并启动服务：
 
 ```powershell
 .\scripts\quickstart.bat
@@ -84,13 +86,19 @@ pip install -e ".[dev,asr]"
 playwright install chromium
 zhiji check-env          # 验证环境
 cd frontend
-npm install
+npm ci
 npm run build           # 生成 frontend/dist，供 FastAPI 托管
 cd ..
 zhiji web                # 启动 Web 服务 (http://127.0.0.1:8000)
 ```
 
 冒烟测试：`python scripts\smoke_test.py`（需先启动服务）。演示流程见 [docs/DEMO.md](docs/DEMO.md)。
+
+## v0.1.0 发布验收
+
+本版本已完成桌面工作台的发布验收与稳定性收尾：双账号隔离、重启持久化、备份恢复、迁移幂等、全新安装、API 冒烟与 1280×800 / 1440×900 两档桌面 UI 验收均已通过。范围、证据、已知边界和复跑命令见 [docs/RELEASE_ACCEPTANCE.md](docs/RELEASE_ACCEPTANCE.md)。
+
+Docker 真构建由 CI 的 `docker` job 覆盖；本次验收环境没有 Docker CLI，因此本机只做了 Dockerfile / Compose 静态校验。
 
 ## 使用
 
@@ -188,7 +196,7 @@ cd frontend; npm run dev        # Vite 开发服务 (:5173)
 cd control-plane; mvn test      # Java 测试
 ```
 
-CI（GitHub Actions）在 Ubuntu 与 Windows 上跑 ruff、mypy、pytest 三件套 + Docker 构建。
+CI（GitHub Actions）在 Ubuntu / Windows × Python 3.11 / 3.12 上跑 ruff、mypy、pytest；另有独立前端构建 job，以及 Docker 非 root 启动与健康检查 job。
 
 ## 隐私与安全
 
@@ -210,7 +218,8 @@ CI（GitHub Actions）在 Ubuntu 与 Windows 上跑 ruff、mypy、pytest 三件�
 - [x] 阶段 C④（MVP）：文档助手 CRUD、自动保存、笔记 / 知识库取材、流式协作与 Markdown 导出
 - [ ] 阶段 C④：批处理、复杂格式转换、`doc_jobs` 异步任务
 - [x] 阶段 C⑤（MVP）：媒体工坊上传预览、PyAV 异步处理、任务与产物闭环；字幕依赖可选 `asr` 额外依赖
-- [ ] 工程化收尾：Docker 镜像内置 Vue 构建产物
+- [x] 工程化收尾：Docker 镜像内置 Vue 构建产物，quickstart 自动构建前端
+- [x] v0.1.0：桌面 Web 发布验收与稳定性收尾（见 `docs/RELEASE_ACCEPTANCE.md`）
 
 ### 平台能力
 

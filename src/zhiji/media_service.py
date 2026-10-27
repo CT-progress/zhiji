@@ -291,8 +291,10 @@ def _convert_media(
             if include_video and video_stream is not None:
                 rate = video_stream.average_rate or 25
                 video_out = output.add_stream("libx264", rate=rate)
-                source_width = int(video_stream.codec_context.width)
-                source_height = int(video_stream.codec_context.height)
+                source_width = int(getattr(video_stream.codec_context, "width", 0) or 0)
+                source_height = int(getattr(video_stream.codec_context, "height", 0) or 0)
+                if source_width <= 0 or source_height <= 0:
+                    raise MediaValidationError("无法读取视频尺寸")
                 target_width = max(2, source_width - source_width % 2)
                 target_height = max(2, source_height - source_height % 2)
                 video_out.width = target_width
@@ -300,7 +302,9 @@ def _convert_media(
                 video_out.pix_fmt = "yuv420p"
                 video_out.options = {"crf": "23", "preset": "veryfast"}
             if include_audio and audio_stream is not None:
-                rate = int(audio_stream.codec_context.sample_rate or 44100)
+                rate = int(
+                    getattr(audio_stream.codec_context, "sample_rate", None) or 44100
+                )
                 audio_out = output.add_stream(
                     "libmp3lame" if not include_video else "aac", rate=rate
                 )
@@ -319,8 +323,10 @@ def _convert_media(
                 if is_cancelled():
                     raise GenerationCancelledError("媒体处理已取消")
                 frame_time = None
-                if frame.pts is not None and frame.time_base is not None:
-                    frame_time = float(frame.pts * frame.time_base)
+                frame_pts = getattr(frame, "pts", None)
+                frame_time_base = getattr(frame, "time_base", None)
+                if frame_pts is not None and frame_time_base is not None:
+                    frame_time = float(frame_pts * frame_time_base)
                 if frame_time is not None and frame_time < start:
                     continue
                 if frame_time is not None and frame_time >= end:
@@ -332,6 +338,7 @@ def _convert_media(
                         height=video_out.height,
                     )
                     encoded_frame.pts = video_pts
+                    assert output_video_rate is not None
                     encoded_frame.time_base = Fraction(1, 1) / output_video_rate
                     video_pts += 1
                     for packet in video_out.encode(encoded_frame):

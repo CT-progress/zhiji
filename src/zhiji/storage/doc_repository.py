@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import builtins
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -88,6 +89,20 @@ class DocRepository:
         source_id: str | None = None,
         user_id: str | None = None,
     ) -> DocRow:
+        # 保证“最新创建”严格晚于当前作用域内的最后更新时间。系统时钟回拨或同一
+        # 微秒内连续创建时，仅按时间排序仍可能返回不稳定顺序。
+        latest_stmt = (
+            select(DocRow.updated_at)
+            .order_by(DocRow.updated_at.desc())
+            .limit(1)
+        )
+        latest_stmt = _apply_scope(latest_stmt, DocRow.user_id, user_id)
+        latest = self.session.scalar(latest_stmt)
+        if latest is not None and latest.tzinfo is None:
+            latest = latest.replace(tzinfo=UTC)
+        timestamp = datetime.now(UTC)
+        if latest is not None and timestamp <= latest:
+            timestamp = latest + timedelta(microseconds=1)
         row = DocRow(
             id=str(uuid4()),
             user_id=user_id,
@@ -96,6 +111,8 @@ class DocRepository:
             format=format,
             source_type=source_type,
             source_id=source_id,
+            created_at=timestamp,
+            updated_at=timestamp,
         )
         self.session.add(row)
         self.session.flush()
@@ -138,7 +155,7 @@ class DocRepository:
             "sources": sum(1 for row in rows if row.source_type != "blank"),
         }
 
-    def source_options(self, *, user_id: UserScope = ANY_USER) -> list[dict]:
+    def source_options(self, *, user_id: UserScope = ANY_USER) -> builtins.list[dict]:
         """返回可转成文档的笔记与知识库资料，按最近更新排序。"""
 
         notes_stmt = select(NoteRow)

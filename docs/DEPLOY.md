@@ -4,6 +4,8 @@
 就能跑起来，数据落具名卷、重启不丢。公网开放是后续可选步骤（见末尾「公网部署」与
 `docs/PLAN.md` 5.3 附录）。
 
+> v0.1.0 的交付形态是**桌面浏览器工作台 + 自托管单机**。手机端不属于本版本验收范围；SaaS 多租户、计费与运营后台也未纳入本版本。
+
 > 没有 Docker 也能用：见本文档末尾「无 Docker：本机直接运行」。
 
 ---
@@ -26,11 +28,11 @@
 git clone <仓库地址> zhiji && cd zhiji
 cp .env.example .env          # Windows: copy .env.example .env
 # 按需编辑 .env（不编辑也能用默认值）
-docker compose up -d           # 构建并后台启动
+docker compose up -d           # 构建并后台启动（构建阶段自动打包 Vue 工作台）
 docker compose ps              # 等到 STATE 显示 healthy
 ```
 
-浏览器打开 **http://127.0.0.1:8000**：
+镜像构建会自动执行前端 `npm ci` + `npm run build`，运行时直接托管 `frontend/dist/`。浏览器打开 **http://127.0.0.1:8000**：
 
 1. 首次访问会进入注册页——**注册一个账号**（第一个账号即管理员，之后可在设置里关闭注册）。
 2. 「设置 → 模型」添加一个 LLM 模型（名称 / API Key / Base URL / 模型 ID）。
@@ -249,10 +251,16 @@ python -m venv .venv
 pip install -e ".[dev,asr]"
 playwright install chromium
 zhiji check-env
+cd frontend
+npm ci
+npm run build      # 必须先构建，FastAPI 才能托管 Vue 工作台
+cd ..
 zhiji web          # 默认 http://127.0.0.1:8000
 ```
 
-详见 `README.md`。Obsidian vault 接入同样只需在「设置 → 保存路径」填 vault 的
+Windows 上也可直接运行 `scripts\quickstart.bat`，脚本会完成上述前端构建与数据库迁移。
+
+详见 `README.md` 与 `docs/RELEASE_ACCEPTANCE.md`。Obsidian vault 接入同样只需在「设置 → 保存路径」填 vault 的
 **绝对路径**（如 `D:\Vault\Zhiji`），无需挂载。
 
 ---

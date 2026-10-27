@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -181,7 +182,7 @@ class MediaRepository:
 
     def list_artifacts(
         self, media_id: str, *, user_id: UserScope = ANY_USER
-    ) -> list[MediaArtifactRow]:
+    ) -> builtins.list[MediaArtifactRow]:
         stmt = (
             select(MediaArtifactRow)
             .where(MediaArtifactRow.media_id == media_id)

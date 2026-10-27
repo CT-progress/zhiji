@@ -58,5 +58,6 @@ warn_unused_ignores = true
 
 # 这些第三方库已安装但未携带类型信息（无 py.typed），跳过其内部检查
 [[tool.mypy.overrides]]
-module = ["yaml", "yt_dlp", "faster_whisper"]
+module = ["yaml", "yt_dlp", "faster_whisper", "av"]
 ignore_missing_imports = true
+follow_imports = "skip"

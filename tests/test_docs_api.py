@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -349,3 +350,28 @@ def test_assist_rejects_empty_document_and_invalid_source(client: TestClient) ->
         json={"source_type": "note"},
     )
     assert missing_note_id.status_code == 400
+
+
+def test_document_order_is_stable_when_clock_does_not_advance(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from zhiji.storage import doc_repository
+
+    fixed = datetime(2026, 10, 27, 8, 0, 0, tzinfo=UTC)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[no-untyped-def]
+            return fixed.astimezone(tz) if tz is not None else fixed.replace(tzinfo=None)
+
+    monkeypatch.setattr(doc_repository, "datetime", FrozenDateTime)
+    _, token = _register_and_login(client, "alice")
+    headers = _headers(token)
+
+    first = _create_doc(client, token, title="第一篇", content="same tick")
+    second = _create_doc(client, token, title="第二篇", content="same tick")
+
+    assert first["updated_at"] == "2026-10-27T08:00:00+00:00"
+    assert second["updated_at"] == "2026-10-27T08:00:00.000001+00:00"
+    listed = client.get("/api/docs", headers=headers)
+    assert [item["id"] for item in listed.json()["documents"]] == [second["id"], first["id"]]

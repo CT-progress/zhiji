@@ -5,7 +5,7 @@
 
 * 入口脚本是 POSIX sh、以 LF 结尾、默认要求登录、能透传显式命令；
 * 入口脚本硬编码的 CLI 选项必须真实存在（跨文件契约）；
-* Dockerfile 以非 root 运行、内置 Playwright、带健康检查、可写状态走卷；
+* Dockerfile 内置 Vue 构建阶段、以非 root 运行、内置 Playwright、带健康检查、可写状态走卷；
 * ``.dockerignore`` 必须挡住本机状态与密钥，避免被 `docker build` 烤进镜像。
 """
 
@@ -22,6 +22,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE = ROOT / "Dockerfile"
 DOCKERIGNORE = ROOT / ".dockerignore"
 ENTRYPOINT = ROOT / "docker" / "entrypoint.sh"
+QUICKSTART = ROOT / "scripts" / "quickstart.bat"
+SMOKE_TEST = ROOT / "scripts" / "smoke_test.py"
 
 
 def _dockerfile() -> str:
@@ -81,6 +83,21 @@ def test_dockerfile_runs_as_non_root() -> None:
     assert text.rstrip().splitlines()[-1].strip() == 'ENTRYPOINT ["/usr/local/bin/zhiji-entrypoint"]'
 
 
+def test_dockerfile_builds_and_ships_vue_frontend() -> None:
+    text = _dockerfile()
+    assert "FROM node:20-bookworm-slim AS frontend-builder" in text
+    assert "COPY frontend/package.json frontend/package-lock.json ./" in text
+    assert "npm ci --no-audit --no-fund" in text
+    assert "npm run build" in text
+    assert (
+        "COPY --from=frontend-builder --chown=zhiji:zhiji /app/frontend/dist ./frontend/dist"
+        in text
+    )
+    # FastAPI 从项目根目录读取 frontend/dist，容器内路径必须与之一致。
+    app_source = (ROOT / "src" / "zhiji" / "web" / "app.py").read_text("utf-8")
+    assert 'parents[3] / "frontend" / "dist"' in app_source
+
+
 def test_dockerfile_installs_playwright_and_healthcheck() -> None:
     text = _dockerfile()
     assert "playwright install --with-deps chromium" in text
@@ -114,16 +131,49 @@ def test_dockerignore_blocks_local_state_and_secrets() -> None:
         for line in DOCKERIGNORE.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.strip().startswith("#")
     }
-    for expected in ("data/", "config/", "output/", ".env", ".env.*", ".master_key", ".venv"):
+    for expected in (
+        "data/",
+        "config/",
+        "output/",
+        ".env",
+        ".env.*",
+        ".master_key",
+        ".venv",
+        "frontend/node_modules/",
+        "frontend/dist/",
+    ):
         assert expected in patterns, f".dockerignore 缺少 {expected}"
-    assert patterns.isdisjoint({"src/", "pyproject.toml", "README.md"})
+    assert patterns.isdisjoint(
+        {"src/", "pyproject.toml", "README.md", "frontend/src/", "frontend/package.json"}
+    )
 
-def test_ci_builds_and_probes_the_container() -> None:
+
+def test_windows_quickstart_checks_node_and_builds_frontend() -> None:
+    text = QUICKSTART.read_text(encoding="utf-8")
+    assert "Node.js 18+" in text
+    assert "npm.cmd ci --no-audit --no-fund" in text
+    assert "npm.cmd run build" in text
+    assert "pushd frontend" in text
+    assert "python -m zhiji migrate" in text
+    assert "python -m zhiji web --port 8000" in text
+
+
+def test_smoke_test_forces_utf8_output() -> None:
+    text = SMOKE_TEST.read_text(encoding="utf-8")
+    assert 'sys.stdout.reconfigure(encoding="utf-8", errors="replace")' in text
+    assert 'sys.stderr.reconfigure(encoding="utf-8", errors="replace")' in text
+
+
+def test_ci_builds_frontend_and_probes_the_container() -> None:
     """本机没有 Docker CLI，CI 的 docker job 是唯一的真实构建验证点。"""
 
     workflow = yaml.safe_load(
         (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     )
+    frontend = workflow["jobs"]["frontend"]
+    frontend_script = "\n".join(step.get("run", "") for step in frontend["steps"])
+    assert "npm ci --no-audit --no-fund" in frontend_script
+    assert "npm run build" in frontend_script
     job = workflow["jobs"]["docker"]
     assert job["runs-on"] == "ubuntu-latest"
     script = "\n".join(step.get("run", "") for step in job["steps"])

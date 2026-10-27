@@ -677,6 +677,13 @@ def create_app(
     def save_note(payload: dict, request: Request) -> dict:
         content = payload.get("content", "")
         path_str = payload.get("path")
+        conversation_id = payload.get("conversation_id")
+        scope = _scope_user(request)
+        conversation = (
+            _get_or_404(store, conversation_id, user_id=scope)
+            if conversation_id
+            else None
+        )
         output_root = config.resolve_output_dir().resolve()
         if path_str:
             # 覆盖已有笔记文件（“设为当前笔记”场景），仅允许写入输出目录内
@@ -685,19 +692,27 @@ def create_app(
                 raise HTTPException(status_code=400, detail="仅支持 Markdown 文件")
             if not path.is_relative_to(output_root):
                 raise HTTPException(status_code=400, detail="只能覆盖输出目录内的笔记文件")
+            if scope is not None:
+                user_notes_dir = (output_root / "notes" / str(scope)).resolve()
+                owned_path = (
+                    Path(conversation.note_path).resolve()
+                    if conversation is not None and conversation.note_path
+                    else None
+                )
+                if not path.is_relative_to(user_notes_dir) and path != owned_path:
+                    raise HTTPException(status_code=404, detail="笔记文件不存在")
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
         else:
             title = payload.get("title", "未命名笔记")
             safe_title = re.sub(r'[\\/:*?"<>|]', "_", title)[:80]
             notes_dir = output_root / "notes"
+            if scope is not None:
+                notes_dir = notes_dir / str(scope)
             notes_dir.mkdir(parents=True, exist_ok=True)
             path = notes_dir / f"{safe_title}.md"
             path.write_text(content, encoding="utf-8")
-        conversation_id = payload.get("conversation_id")
         if conversation_id:
-            scope = _scope_user(request)
-            _get_or_404(store, conversation_id, user_id=scope)
             store.attach_note(
                 conversation_id,
                 user_id=scope,

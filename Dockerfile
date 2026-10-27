@@ -1,7 +1,7 @@
 # 知记（zhiji）镜像
 #
 # 设计要点：
-#   1. 多阶段构建：builder 里准备虚拟环境，runtime 只拷贝 venv 与源码；
+#   1. 多阶段构建：Node 阶段构建 Vue 工作台，Python 阶段准备虚拟环境，runtime 只拷贝产物与源码；
 #   2. 以「可编辑安装」的方式把包装在 /app/src（editable install），这样
 #      zhiji.config.PROJECT_ROOT 仍然指向 /app，data/ config/ output/ .tmp/
 #      全部落在卷挂载点上，而不是散进 site-packages；
@@ -11,7 +11,18 @@
 
 ARG PYTHON_VERSION=3.12
 
-# ---------- 构建阶段：只负责产出 /opt/venv ----------
+# ---------- 前端构建阶段：产出 frontend/dist ----------
+FROM node:20-bookworm-slim AS frontend-builder
+
+WORKDIR /app/frontend
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY frontend/ ./
+RUN npm run build
+
+# ---------- Python 构建阶段：只负责产出 /opt/venv ----------
 FROM python:${PYTHON_VERSION}-slim-bookworm AS builder
 
 # 默认依赖都有 manylinux wheel；装编译工具只是兜底，构建完即被丢弃。
@@ -72,6 +83,7 @@ WORKDIR /app
 
 COPY --chown=zhiji:zhiji pyproject.toml README.md ./
 COPY --chown=zhiji:zhiji src ./src
+COPY --from=frontend-builder --chown=zhiji:zhiji /app/frontend/dist ./frontend/dist
 COPY --chown=zhiji:zhiji docker/entrypoint.sh /usr/local/bin/zhiji-entrypoint
 
 # 源码树在 Windows 上检出可能是 CRLF，运行时统一成 LF 再赋可执行权限。
