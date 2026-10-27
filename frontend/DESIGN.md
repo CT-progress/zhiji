@@ -94,7 +94,7 @@ Replaced the generic 3-column icon-rail + sidebar + main shell with a **bento ho
 - **`.shell`** — full-height flex column (`shell-top` brand bar + `shell-main` content area).
 - **`.shell-top`** — 52px brand bar: logo + health + user (home only, hidden in focus mode).
 - **`.bento`** — CSS grid, 4 columns × 2 rows, grid-template-areas:
-  `"video notes knowledge" / "video docs media"`. The video tile spans 2 rows (live workspace); notes is now live with counts; the remaining 3 are "soon" tiles with feature chips.
+  `"video notes knowledge" / "video docs media"`. The video tile spans 2 rows; video, notes and knowledge are live tiles with real stats or activity; docs and media remain "soon" tiles with feature chips.
 - **`.bento-tile`** — bordered panel tile, hover = accent border + surface bg, active press = slight scale.
 
 ### Navigation: Dot Dock

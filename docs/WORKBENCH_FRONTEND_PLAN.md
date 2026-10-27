@@ -1,37 +1,53 @@
 # 知记工作台 · 前端改造计划书
 
-> 版本：v0.1（2026-10-26） · 配套 `WORKBENCH_PRODUCT.md` / `WORKBENCH_TECH.md`
+> 版本：v0.2（2026-10-27） · 配套 `WORKBENCH_PRODUCT.md` / `WORKBENCH_TECH.md`
 > 范围：先迁框架，再改 UI（改 UI 前先读 skill），最后逐个加工作区。
 
 ## 0. 速览
 
 | 项 | 内容 |
 | --- | --- |
-| 现状 | 零构建 vanilla JS 单页（`web/static/app.js` 52KB + `app.css` + `config.html`），FastAPI 在 `/` 返回 `config.html`、`/static` 挂载静态资源 |
+| 现状 | Vue 3 + Vite + Pinia 工作台已上线；FastAPI 生产入口优先托管 `frontend/dist/`，旧 `web/static/` 仅保留兼容回退 |
 | 目标 | 改成 **Vue 3 + Vite + Pinia** 多工作台外壳；视频解析流迁成 ① 工作区；UI 重设计后逐个加 ②③④⑤ |
 | 顺序 | 阶段 A 框架迁移 → 阶段 B UI 重设计 → 阶段 C 后续工作区 |
 | 原则 | 不一次性重写；旧 vanilla 视频解析逻辑照搬进 Vue 组件，业务逻辑不动；每步可回滚 |
 
+## 当前执行状态
+
+> 更新时间：2026-10-27。阶段 A/B 与阶段 C 前三个工作区已落地；④⑤ 尚未开始。
+
+| 阶段 | 状态 | 当前结果 |
+| --- | --- | --- |
+| A 框架迁移 | ✅ 完成 | Vue 3 + Vite + Pinia；FastAPI 托管 `frontend/dist/` |
+| B UI 重设计 | ✅ 完成（方向一） | Bento 首页 + Dot Dock + Focus Mode + 会话抽屉 |
+| C① 视频解析 | ✅ 完成 | 多平台解析、流式笔记与追问迁入 Vue 工作区 |
+| C② 笔记与待办 | 🟡 MVP 完成 | notes / todos CRUD、自动保存、关联笔记；提醒 / 日历 / 习惯未做 |
+| C③ 知识库 | 🟡 MVP 完成 | 资料库 / 导入 / 阅读 / 检索 / 引用 / SSE 问答；PDF / Office 未做 |
+| C④ 文档助手 | ⏳ 未开始 | 依赖 ③ 的文档输入与输出能力 |
+| C⑤ 媒体工坊 | ⏳ 未开始 | 依赖 FFmpeg / Whisper 与异步任务 |
+
+> 「MVP 完成」表示主链路已可用，不表示 MVP 范围里的所有子能力都已交付。
+
 ---
 
-## 阶段 A · 框架迁移
+## 阶段 A · 框架迁移（已完成）
 
-目标：把单流 vanilla 应用换成 Vue 多工作台外壳，① 视频解析工作区在新框架里跑通。此阶段不碰视觉设计，先用朴素可用 UI 验证骨架。
+目标（已完成）：把迁移前的单流 vanilla 应用换成 Vue 多工作台外壳，① 视频解析工作区在新框架里跑通。此阶段不碰视觉设计，先用朴素可用 UI 验证骨架。
 
 ### A1 脚手架与联调通路
 - 在仓库根新建 `frontend/`，初始化 Vite + Vue 3 + Pinia。
 - 配置 Vite dev server：`/api` 反代到本地 FastAPI（`:8000`），开发时前端跑 Vite、后端跑 uvicorn。
-- 生产构建：`vite build` 产物落 `frontend/dist/`；FastAPI 改为托管 `dist/`（`/` 返回 `dist/index.html`，`/assets` 挂载静态），旧 `/static` 与 `config.html` 暂时保留不动，等 A4 再清。
+- 生产构建：`vite build` 产物落 `frontend/dist/`；FastAPI 当前已优先托管 `dist/`（`/` 返回 `dist/index.html`，`/assets` 挂载静态）。旧 `/static` 与 `config.html` 仅作未构建产物的兼容回退。
 - 跑通最简「Vite 首页 → 调 `/api/health`」确认通路。
 
 ### A2 工作台外壳
-- 左侧竖排导航栏：五个工作区图标 + 短标签（① 视频解析 ② 笔记与待办 ③ 知识库 ④ 文档助手 ⑤ 媒体工坊），顶部全局区（用户名 / 设置 / 凭据）。
+- 先实现左侧竖排导航栏：五个工作区图标 + 短标签（① 视频解析 ② 笔记与待办 ③ 知识库 ④ 文档助手 ⑤ 媒体工坊），顶部全局区（用户名 / 设置 / 凭据）；B 阶段方向一已将其替换为 Bento 首页 + Dot Dock。
 - Pinia store：`auth`（登录态）、`ui`（当前工作区）、`core`（models / settings / 平台凭据，复用现有 `/api/models` `/api/settings`）。
 - 外壳只负责切工作区、把主区让给对应组件渲染；每个工作区是一个 Vue 组件。
 - 鉴权沿用现有 cookie，Vite 反代后 cookie 同源，无需改后端。
 
 ### A3 迁移工作区①（视频解析）
-- 把现有 `app.js` 的视频解析 + 会话 + 流式笔记生成逻辑迁成 `frontend/src/workspaces/video/` 下的组件与 composable。
+- 把现有 `app.js` 的视频解析 + 会话 + 流式笔记生成逻辑迁入 `frontend/src/workspaces/VideoWorkspace.vue`，通用请求与 SSE 逻辑放在 `frontend/src/lib/`。
 - 业务逻辑（`api()`、`streamSSE()`、提交任务、查状态、读流式 delta）照搬，不重写。
 - 会话列表降级为 ① 工作区内部子侧栏，不再是全局主结构。
 - SSE 流式用 `fetch` + `ReadableStream` 读，Vue 组件用 `ref` 持有增量。
@@ -39,12 +55,12 @@
 
 ### A4 验证与旧代码清理
 - 跑通：注册 / 登录 → 选平台 → 提交链接 → 解析 → 生成笔记 → 对话 → 设置模型 / 凭据。
-- 确认无回归后，把 FastAPI 入口切到 Vue 产物；旧 `web/static/app.js` / `app.css` / `config.html` 移到 `legacy/` 备份保留（不删，便于回滚对照）。
+- 确认无回归后，把 FastAPI 入口切到 Vue 产物；旧 `web/static/app.js` / `app.css` / `config.html` 保留为兼容回退，不删，便于回滚对照。
 - 提交。
 
 ---
 
-## 阶段 B · UI 重设计（改 UI 前先读 skill）
+## 阶段 B · UI 重设计（已完成 · 方向一）
 
 目标：定下工作台视觉语言并应用到外壳 + ① 工作区，给后续工作区立模板。
 
@@ -64,16 +80,16 @@
 
 ---
 
-## 阶段 C · 后续工作区（按新框架 + 新 UI）
+## 阶段 C · 后续工作区（进行中）
 
 顺序与理由（依赖从少到多、能最快看到界面成型优先）：
 
-1. **② 笔记与待办**：notes / todos / reminders / 日程 / 习惯打卡。依赖最少，纯 CRUD + 本地提醒轮询。
-2. **③ 知识库**：项目库 / 文件上传 / 文档解析 / 全文 + 向量检索 / 资料问答。依赖解析与向量索引，复杂度最高，放第二。
-3. **④ 文档助手**：总结 / 问答 / 生成 / 润色 / 批处理 / 转换导出。输入源接 ③ 的文件或本地上传，故排在 ③ 之后。
-4. **⑤ 媒体工坊**：上传预览 / 字幕（Whisper）/ FFmpeg / 异步导出。依赖 FFmpeg 与长任务，放最后。
+1. **② 笔记与待办**：notes / todos 已交付 MVP；reminders / 日程 / 习惯打卡仍待实现。
+2. **③ 知识库**：资料库 / 文本导入 / 阅读 / 混合检索 / 引用 / 资料问答已交付 MVP；PDF / Office 解析待补。
+3. **④ 文档助手**：未开始。计划提供总结 / 问答 / 生成 / 润色 / 批处理 / 转换导出，输入源接 ③。
+4. **⑤ 媒体工坊**：未开始。计划提供上传预览 / 字幕（Whisper）/ FFmpeg / 异步导出。
 
-每个工作区走「表 + 仓储 + worker handler + Vue 组件」四件套，独立提交，互不阻塞。
+新工作区继续按「表 + 仓储 + Vue 组件」分层；耗时解析与导出再接入 worker handler。每个工作区独立提交，互不阻塞。
 
 ---
 
