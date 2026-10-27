@@ -7,6 +7,7 @@ import DotDock from './DotDock.vue'
 import VideoWorkspace from '../workspaces/VideoWorkspace.vue'
 import NotesWorkspace from '../workspaces/NotesWorkspace.vue'
 import KnowledgeWorkspace from '../workspaces/KnowledgeWorkspace.vue'
+import DocsWorkspace from '../workspaces/DocsWorkspace.vue'
 import FocusPlaceholder from '../workspaces/FocusPlaceholder.vue'
 import SettingsPage from '../settings/SettingsPage.vue'
 
@@ -24,7 +25,6 @@ onMounted(() => window.addEventListener('keydown', onKey))
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
 const soonFeatures = {
-  docs: ['总结', '问答', '生成', '润色', '导出'],
   media: ['Whisper 字幕', 'FFmpeg 转码', '异步导出'],
 }
 </script>
@@ -42,7 +42,7 @@ const soonFeatures = {
         <VideoWorkspace v-if="ui.focus === 'video'" />
         <NotesWorkspace v-else-if="ui.focus === 'notes'" />
         <KnowledgeWorkspace v-else-if="ui.focus === 'knowledge'" />
-        <FocusPlaceholder v-else-if="ui.focus === 'docs'" label="文档助手" sub="总结 · 问答 · 生成 · 润色 · 批处理 · 转换导出" :features="soonFeatures.docs" />
+        <DocsWorkspace v-else-if="ui.focus === 'docs'" />
         <FocusPlaceholder v-else-if="ui.focus === 'media'" label="媒体工坊" sub="上传预览 · Whisper 字幕 · FFmpeg · 异步导出" :features="soonFeatures.media" />
       </div>
     </main>

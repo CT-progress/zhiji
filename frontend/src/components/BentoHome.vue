@@ -13,12 +13,14 @@ const convCount = computed(() => core.conversations.length)
 const noteCount = computed(() => core.conversations.filter((c) => c.has_note).length)
 const noteStats = ref({ notes: 0, todos: 0 })
 const knowledgeStats = ref({ libraries: 0, documents: 0, chunks: 0, characters: 0 })
+const docStats = ref({ documents: 0, characters: 0, updated_today: 0, sources: 0 })
 
 async function loadWorkspaceStats() {
   const results = await Promise.allSettled([
     api('/api/notes'),
     api('/api/todos?done=false'),
     api('/api/knowledge/stats'),
+    api('/api/docs/stats'),
   ])
   if (results[0].status === 'fulfilled') {
     noteStats.value.notes = (results[0].value.notes || []).length
@@ -29,6 +31,9 @@ async function loadWorkspaceStats() {
   if (results[2].status === 'fulfilled') {
     knowledgeStats.value = results[2].value.stats || knowledgeStats.value
   }
+  if (results[3].status === 'fulfilled') {
+    docStats.value = results[3].value.stats || docStats.value
+  }
 }
 
 onMounted(loadWorkspaceStats)
@@ -37,7 +42,7 @@ const tiles = [
   { key: 'video', label: '视频解析', sub: '把视频 / 图文变成结构化笔记', icon: Video, area: 'video', live: true },
   { key: 'notes', label: '笔记与待办', sub: '独立笔记 · 待办流 · 本地自动保存', icon: NotebookPen, area: 'notes', live: true },
   { key: 'knowledge', label: '知识库', sub: '文件 · 全文检索 · 资料问答', icon: Library, area: 'knowledge', live: true },
-  { key: 'docs', label: '文档助手', sub: '总结 · 问答 · 生成 · 润色', icon: FileText, area: 'docs', soon: ['总结', '问答', '润色', '导出'] },
+  { key: 'docs', label: '文档助手', sub: '取材 · 写作 · 流式协作 · 导出', icon: FileText, area: 'docs', live: true },
   { key: 'media', label: '媒体工坊', sub: '字幕 · FFmpeg · 异步导出', icon: Film, area: 'media', soon: ['Whisper', '字幕', '转码', '导出'] },
 ]
 </script>
@@ -79,6 +84,15 @@ const tiles = [
           <span>{{ new Intl.NumberFormat('zh-CN').format(knowledgeStats.characters) }} 字符</span>
         </div>
         <div class="live-cta">{{ knowledgeStats.documents ? '继续检索与提问' : '建立第一块知识空间' }} <ArrowRight :size="14" /></div>
+      </div>
+
+      <div v-else-if="t.key === 'docs'" class="tile-body live docs-live">
+        <div class="live-stat"><span class="ls-num">{{ docStats.documents }}</span><span class="ls-lab">篇文档</span><span class="ls-num">{{ docStats.sources }}</span><span class="ls-lab">次取材</span></div>
+        <div class="knowledge-index-line">
+          <span>{{ new Intl.NumberFormat('zh-CN').format(docStats.characters) }} 字符</span>
+          <span>{{ docStats.updated_today }} 篇今日更新</span>
+        </div>
+        <div class="live-cta">{{ docStats.documents ? '继续写作与协作' : '打开第一张写作台' }} <ArrowRight :size="14" /></div>
       </div>
 
       <div v-else class="tile-body soon-body">

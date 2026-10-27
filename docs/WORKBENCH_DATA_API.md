@@ -23,6 +23,11 @@ knowledge_documents
 knowledge_chunks
   id, document_id, user_id, ordinal, text, embedding_json,
   char_count, start_offset, end_offset, created_at
+
+── ④ 文档助手（已实现） ──
+documents
+  id, user_id, title, content, format, source_type, source_id?,
+  created_at, updated_at
 ```
 
 约定：
@@ -30,7 +35,7 @@ knowledge_chunks
 - `knowledge_libraries → knowledge_documents → knowledge_chunks` 为级联删除。
 - 文档原文、切片文本和 128 维哈希向量均存本机数据库。
 - `start_offset / end_offset` 指向规范化原文，用于检索命中回跳。
-- 所有业务行都带 `user_id`；用户作用域之外的资料统一视为不存在。
+- 所有业务行都带 `user_id`；用户作用域之外的资料统一视为不存在。`documents.source_type` 为 `blank / note / knowledge`，取材时复制正文而不是引用素材，后续编辑互不影响。
 
 ### 计划中
 
@@ -39,7 +44,7 @@ reminders       # 提醒
 calendar_events # 日历
 habits          # 习惯
 habit_logs      # 打卡记录
-doc_jobs        # ④ 文档助手
+doc_jobs        # ④ 文档批处理（未实现）
 media_assets    # ⑤ 媒体素材
 media_jobs      # ⑤ 媒体任务
 ```
@@ -92,13 +97,26 @@ POST   /api/knowledge/ask/stream                         # SSE，带引用
 
 当前导入支持 `TXT / Markdown / CSV / JSON / HTML`；PDF、Word、PPT、Excel 返回明确的不支持提示。
 
-### ④ / ⑤（计划中）
+### ④ 文档助手（已实现）
 
 ```text
-POST   /api/docs/jobs
-GET    /api/docs/jobs/{id}
-GET    /api/docs/jobs/{id}/download
+GET    /api/docs?q=...
+POST   /api/docs                              # blank / note / knowledge 取材
+GET    /api/docs/{id}
+PUT    /api/docs/{id}
+DELETE /api/docs/{id}
 
+GET    /api/docs/stats
+GET    /api/docs/sources
+GET    /api/docs/{id}/export                  # Markdown / text 附件
+POST   /api/docs/{id}/assist/stream           # SSE，总结 / 问答 / 续写 / 润色
+```
+
+当前为单文档同步闭环；批处理、复杂格式转换和 `POST /api/docs/jobs` 异步任务尚未实现。
+
+### ⑤ 媒体工坊（计划中）
+
+```text
 POST   /api/media/assets
 GET    /api/media/assets/{id}
 POST   /api/media/jobs

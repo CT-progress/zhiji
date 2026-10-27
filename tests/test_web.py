@@ -1,3 +1,5 @@
+import re
+
 from fastapi.testclient import TestClient
 
 from zhiji.config import ConfigManager
@@ -401,25 +403,26 @@ def test_note_generate_stream(tmp_path, monkeypatch):
 
 
 def test_frontend_assets_split_from_html(tmp_path):
-    """#16：前端已拆成 index / css / js 三个静态资源，且页面引用外部资源。"""
+    """当前 Vite 构建产物由 index + hashed css/js 组成，页面只引用外部资源。"""
     client, _ = _client(tmp_path)
 
     index = client.get("/")
     assert index.status_code == 200
-    assert "/static/app.css" in index.text
-    assert "/static/app.js" in index.text
-    assert 'id="auth-page"' in index.text
-    assert 'id="auth-form"' in index.text
-    assert 'id="btn-logout"' in index.text
+    assert 'id="app"' in index.text
     # 不再内联 <style> / 大段 <script>
     assert "<style>" not in index.text
     assert "<script>\n" not in index.text
 
-    css = client.get("/static/app.css")
+    assets = re.findall(r'(?:src|href)="(/assets/[^"]+\.(?:js|css))"', index.text)
+    assert len(assets) == 2
+    css_path = next(path for path in assets if path.endswith(".css"))
+    js_path = next(path for path in assets if path.endswith(".js"))
+
+    css = client.get(css_path)
     assert css.status_code == 200
     assert "text/css" in css.headers["content-type"]
 
-    js = client.get("/static/app.js")
+    js = client.get(js_path)
     assert js.status_code == 200
     assert "javascript" in js.headers["content-type"]
 

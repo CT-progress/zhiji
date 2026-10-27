@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from zhiji.storage.config_repository import ConfigRepository
 from zhiji.storage.credential_repository import CredentialRepository
+from zhiji.storage.doc_repository import DocRepository
 from zhiji.storage.db import (
     DEFAULT_DB_RELATIVE,
     Database,
@@ -27,6 +28,7 @@ from zhiji.storage.tables import (
     Base,
     ConversationMessageRow,
     ConversationRow,
+    DocRow,
     KnowledgeChunkRow,
     KnowledgeDocumentRow,
     KnowledgeLibraryRow,
@@ -55,6 +57,8 @@ __all__ = [
     "ConversationRow",
     "CredentialRepository",
     "Database",
+    "DocRepository",
+    "DocRow",
     "KnowledgeChunkRow",
     "KnowledgeDocumentRow",
     "KnowledgeLibraryRow",

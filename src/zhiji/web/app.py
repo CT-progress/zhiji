@@ -61,6 +61,7 @@ from zhiji.storage import TaskRepository
 from zhiji.storage.scope import ANY_USER, UserScope
 from zhiji.storage.tables import TaskRow, UserRow
 from zhiji.tasks import TaskContext, TaskWorker, get_worker
+from zhiji.web.docs_api import create_docs_router
 from zhiji.web.knowledge_api import create_knowledge_router
 from zhiji.web.notes_api import create_notes_router
 
@@ -1214,6 +1215,14 @@ def create_app(
     app.include_router(create_notes_router(auth_database, _scope_user))
     app.include_router(
         create_knowledge_router(
+            auth_database,
+            _scope_user,
+            config=config,
+            resolve_model=_resolve_model,
+        )
+    )
+    app.include_router(
+        create_docs_router(
             auth_database,
             _scope_user,
             config=config,

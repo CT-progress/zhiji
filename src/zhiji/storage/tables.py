@@ -314,6 +314,28 @@ class TodoRow(Base):
     def __repr__(self) -> str:
         return f"<TodoRow id={self.id!r} title={self.title!r} done={self.done!r}>"
 
+class DocRow(Base):
+    """文档助手主表：保存可编辑的 Markdown 文档与素材来源。"""
+
+    __tablename__ = "documents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, default=None
+    )
+    title: Mapped[str] = mapped_column(String(240), default="无标题文档")
+    content: Mapped[str] = mapped_column(Text, default="")
+    format: Mapped[str] = mapped_column(String(16), default="markdown")
+    source_type: Mapped[str] = mapped_column(String(24), default="blank", index=True)
+    source_id: Mapped[str | None] = mapped_column(String(36), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, index=True
+    )
+
+    def __repr__(self) -> str:
+        return f"<DocRow id={self.id!r} title={self.title!r}>"
+
 class KnowledgeLibraryRow(Base):
     """知识库资料库：按项目或主题组织资料。"""
 

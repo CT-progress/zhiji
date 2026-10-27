@@ -94,7 +94,7 @@ Replaced the generic 3-column icon-rail + sidebar + main shell with a **bento ho
 - **`.shell`** — full-height flex column (`shell-top` brand bar + `shell-main` content area).
 - **`.shell-top`** — 52px brand bar: logo + health + user (home only, hidden in focus mode).
 - **`.bento`** — CSS grid, 4 columns × 2 rows, grid-template-areas:
-  `"video notes knowledge" / "video docs media"`. The video tile spans 2 rows; video, notes and knowledge are live tiles with real stats or activity; docs and media remain "soon" tiles with feature chips.
+  `"video notes knowledge" / "video docs media"`. The video tile spans 2 rows; video, notes, knowledge and docs are live tiles with real stats or activity; media remains the only "soon" tile.
 - **`.bento-tile`** — bordered panel tile, hover = accent border + surface bg, active press = slight scale.
 
 ### Navigation: Dot Dock
@@ -141,7 +141,7 @@ Replaced the generic 3-column icon-rail + sidebar + main shell with a **bento ho
 
 ## Component Inventory
 
-- **Bento tile**: bordered panel, icon + label + sub + body (live stats or soon chips), hover = accent border
+- **Bento tile**: bordered panel, icon + label + sub + body (live stats or upcoming chips), hover = accent border
 - **Dock button**: pill icon button, label expands on hover/active, active = accent-soft bg
 - **Focus placeholder**: centered card for "coming soon" workspaces, back button + feature chips
 - **Conversation drawer**: off-canvas left panel, brand + new-chat + search + conv-list + model mini
@@ -224,3 +224,38 @@ Playwright + Edge（1280×800 / 390×844）截图验收，均通过：
 - **响应式空状态**：已在本地服务中检查知识库空状态和三页签布局，资料库与资料索引分区正常，无卡片平铺回归。
 - **服务**：当前代码已由 FastAPI 在 `http://127.0.0.1:8000` 托管。
 - **截图存档**：`shot_knowledge_home_desktop.png`（当前为窄屏响应式截图，文件名沿用验收记录）。
+
+---
+
+## Workspace 04: Documents (Phase C)
+
+### Desktop: register / paper / co-writing rail
+- **Document register (`272px`)** — numbered document flow with title / body search, source marker, character count and local save state. The archive status strip summarizes documents, sourced drafts, characters and today's updates.
+- **Writing canvas (`minmax(0, 1fr)`)** — warm-paper editing surface on a dark workbench shell. Horizontal ruling, a red binding margin, crop corners, page number and `DRAFT · 独立文档 / 取自笔记 / 取自知识库` metadata make it read as a working sheet rather than a generic textarea card.
+- **Co-writing console (`320px`)** — a numbered action rail for summarize / ask / continue / polish, an operation-specific instruction block, a streaming result surface and explicit write-back controls. Results never overwrite text without a user action.
+
+### Mobile: three-page state machine
+- Below `920px`, the workspace exposes `文档 / 编辑 / AI` as three full-width pages. Selecting a document transitions to the editor; `Alt+1/2/3` switches pages directly.
+- The register, paper canvas and AI rail each occupy the full content width instead of compressing into unreadable columns. All pages respect the dock safe area.
+
+### Interaction contract
+- Autosave runs after `700ms`; `Ctrl+S` flushes immediately. A local version counter and serialized save promise prevent stale requests from overwriting newer edits.
+- New drafts can start blank or copy content from a note / knowledge document. Source metadata remains visible, but later edits do not mutate the source.
+- AI requests send the current in-memory draft rather than waiting for autosave. Polish prioritizes the current textarea selection.
+- Streaming exposes stop, retry and copy; write-back choices are insert at cursor, replace selection, or replace the full document. Full replacement uses a second confirmation state.
+- `/` focuses document search; `Ctrl+Enter` executes the active AI action; delete and full replacement both use two-step confirmation.
+- Markdown and plain-text export download directly from `/api/docs/{id}/export`; all queries and exports are user-scoped.
+
+### Data and API
+- Table: `documents` with `title`, `content`, `format`, `source_type`, `source_id`, timestamps and `user_id`.
+- REST: document CRUD, search, stats, source options and export; SSE: `/api/docs/{id}/assist/stream`.
+- Current boundary: single-document MVP only. Batch operations, complex format conversion and `doc_jobs` asynchronous processing are intentionally deferred.
+
+## C4 验收记录（2026-10-27 · 工作区④ 文档助手）
+
+- **后端测试**：文档、笔记、知识库、跨用户隔离与鉴权门禁共 `35 passed`；Ruff `All checks passed!`。
+- **前端构建**：`npm run build` 通过，1589 modules transformed，CSS 101.21 kB，JS 206.99 kB（1.78s）。
+- **浏览器闭环**：新建空白文档、标题 / 正文输入、700ms 自动保存、`Ctrl+S`、刷新后读回、从笔记取材、AI 总结、插入光标、复制结果和 Markdown 附件下载均通过。
+- **首页入口**：文档瓦片已从 soon 状态切换为真实统计入口，显示文档数、取材数、字符数与今日更新数。
+- **响应式布局**：窄屏下三页签 `文档 / 编辑 / AI` 均可用，无横向溢出；桌面实现登记册 / 纸面 / 协作轨三栏结构。
+- **服务**：最新代码由 FastAPI 在 `http://127.0.0.1:8000` 托管。
