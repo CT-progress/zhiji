@@ -28,6 +28,16 @@ knowledge_chunks
 documents
   id, user_id, title, content, format, source_type, source_id?,
   created_at, updated_at
+
+── ⑤ 媒体工坊（已实现） ──
+media_items
+  id, user_id?, title, filename, media_type, mime_type, extension, size,
+  sha256, duration_ms?, width?, height?, video_codec?, audio_codec?,
+  status, error, storage_path, created_at, updated_at
+
+media_artifacts
+  id, media_id, user_id?, kind, filename, mime_type, size, storage_path,
+  task_id?, metadata_json, created_at
 ```
 
 约定：
@@ -36,6 +46,8 @@ documents
 - 文档原文、切片文本和 128 维哈希向量均存本机数据库。
 - `start_offset / end_offset` 指向规范化原文，用于检索命中回跳。
 - 所有业务行都带 `user_id`；用户作用域之外的资料统一视为不存在。`documents.source_type` 为 `blank / note / knowledge`，取材时复制正文而不是引用素材，后续编辑互不影响。
+- `media_items → media_artifacts` 为级联删除；媒体任务复用现有 `tasks` 表，没有单独的 `media_jobs` 表。`tasks.payload_json.media_id` 关联素材，任务类型为 `media.extract_audio / media.transcode / media.trim / media.transcribe`。
+- 媒体文件落在 `data/media/<user-scope>/<media-id>/`；数据库只存相对 `storage_path`、SHA-256 与探测元数据。
 
 ### 计划中
 
@@ -45,8 +57,7 @@ calendar_events # 日历
 habits          # 习惯
 habit_logs      # 打卡记录
 doc_jobs        # ④ 文档批处理（未实现）
-media_assets    # ⑤ 媒体素材
-media_jobs      # ⑤ 媒体任务
+media_batches   # ⑤ 批量媒体处理（未实现）
 ```
 
 ## 二、核心 API
@@ -114,20 +125,43 @@ POST   /api/docs/{id}/assist/stream           # SSE，总结 / 问答 / 续写 /
 
 当前为单文档同步闭环；批处理、复杂格式转换和 `POST /api/docs/jobs` 异步任务尚未实现。
 
-### ⑤ 媒体工坊（计划中）
+### ⑤ 媒体工坊（已实现）
 
 ```text
-POST   /api/media/assets
-GET    /api/media/assets/{id}
-POST   /api/media/jobs
-GET    /api/media/jobs/{id}
-GET    /api/media/jobs/{id}/download
+GET    /api/media/stats
+GET    /api/media?q=...&media_type=...&offset=0&limit=200
+POST   /api/media/upload?filename=...&title=...   # raw body 上传
+GET    /api/media/{media_id}
+PATCH  /api/media/{media_id}                     # 重命名
+DELETE /api/media/{media_id}
+
+GET    /api/media/{media_id}/file
+GET    /api/media/{media_id}/download
+GET    /api/media/{media_id}/artifacts
+GET    /api/media/{media_id}/tasks
+POST   /api/media/{media_id}/tasks
+POST   /api/media/tasks/{task_id}/cancel
+
+GET    /api/media/artifacts/{artifact_id}/file
+GET    /api/media/artifacts/{artifact_id}/download
+DELETE /api/media/artifacts/{artifact_id}
 ```
+
+上传不使用 multipart：文件内容直接作为请求 body，`filename` 与可选 `title` 放 query，默认单文件上限 512 MiB。创建任务 body：
+
+```json
+{"action":"extract_audio"}
+{"action":"transcode"}
+{"action":"trim","start_ms":150,"end_ms":600}
+{"action":"transcribe"}
+```
+
+动作校验会按素材类型与音轨能力拒绝无效请求；同一素材同时只允许一个活动任务。媒体、任务与产物查询都按当前用户作用域隔离。
 
 ## 三、接口约定
 
 - 所有端点沿用现有 cookie 鉴权，数据按 `user_id` 隔离。
-- 短文本/文件导入当前同步完成；后续批量与二进制解析先落 `tasks` 表再返回 `task_id`。
+- 知识库文本导入与文档 AI 协作当前同步或 SSE 完成；媒体处理走 `tasks` 表异步执行，提交后返回 `task` 并轮询进度。
 - 流式结果统一走 SSE；长任务进度沿用任务轮询接口。
-- 未来二进制上传产物落 `output/` 下对应工作区目录，库里只存 `stored_path` + `sha256`。
+- 媒体原件与产物落 `data/media/` 下对应工作区目录，库里只存相对 `storage_path` + `sha256`。
 - 不引入外部向量服务：当前哈希向量随切片存在 SQLite 中，检索在本机进程内完成。

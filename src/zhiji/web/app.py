@@ -55,6 +55,7 @@ from zhiji.health import (
     summarize,
 )
 from zhiji.llm.client import LLMClient
+from zhiji.media_service import MediaJobService, MediaStorage
 from zhiji.models import LLMModelConfig, TaskStatus
 from zhiji.platforms.cookies import profile_repository, set_profile_database
 from zhiji.storage import TaskRepository
@@ -63,6 +64,7 @@ from zhiji.storage.tables import TaskRow, UserRow
 from zhiji.tasks import TaskContext, TaskWorker, get_worker
 from zhiji.web.docs_api import create_docs_router
 from zhiji.web.knowledge_api import create_knowledge_router
+from zhiji.web.media_api import create_media_router
 from zhiji.web.notes_api import create_notes_router
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -295,7 +297,12 @@ def create_app(
     auth = AuthService(auth_database, secret=secret_key)
     # 平台登录态（Cookie）与账号、配置同库：密文落在这里，明文文件不再是权威存储。
     set_profile_database(auth_database)
-    task_worker = worker
+    media_storage = MediaStorage(store.data_dir / "media")
+    media_service = MediaJobService(auth_database, media_storage, config)
+    # 显式工作区必须使用独立 worker，避免任务写入进程级默认数据库。
+    task_worker = worker or (
+        TaskWorker(database=auth_database) if data_dir is not None else None
+    )
     # 账号鉴权开关：显式参数优先，其次读取环境变量，默认关闭。
     require_auth = _env_flag(REQUIRE_AUTH_ENV) if require_auth is None else bool(require_auth)
     if require_auth and store.backend_name == JSON_BACKEND:
@@ -442,6 +449,7 @@ def create_app(
         if task_worker is None:
             task_worker = get_worker()
         _install_note_handler(task_worker)
+        media_service.install(task_worker)
         return task_worker
 
     @asynccontextmanager
@@ -1229,7 +1237,14 @@ def create_app(
             resolve_model=_resolve_model,
         )
     )
-
+    app.include_router(
+        create_media_router(
+            auth_database,
+            _scope_user,
+            storage=media_storage,
+            resolve_worker=_resolve_worker,
+        )
+    )
     return app
 
 

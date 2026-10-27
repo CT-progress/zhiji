@@ -42,9 +42,7 @@ class TaskRow(Base):
     )
     type: Mapped[str] = mapped_column(String(64), index=True)
     platform: Mapped[str | None] = mapped_column(String(32), index=True, default=None)
-    status: Mapped[str] = mapped_column(
-        String(16), index=True, default=TaskStatus.PENDING.value
-    )
+    status: Mapped[str] = mapped_column(String(16), index=True, default=TaskStatus.PENDING.value)
     priority: Mapped[int] = mapped_column(Integer, default=0)
     progress: Mapped[int] = mapped_column(Integer, default=0)
     payload_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -175,9 +173,7 @@ class LLMCredentialRow(Base):
     """
 
     __tablename__ = "llm_credentials"
-    __table_args__ = (
-        UniqueConstraint("user_id", "name", name="uq_llm_credential_user_name"),
-    )
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_llm_credential_user_name"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     #: 凭据归属用户；None 表示本机默认作用域（与全局模型配置对应）
@@ -191,9 +187,7 @@ class LLMCredentialRow(Base):
     key_hint: Mapped[str] = mapped_column(String(64), default="")
     status: Mapped[str] = mapped_column(String(16), default=CREDENTIAL_ACTIVE)
     #: 最近一次健康检查时间与失败摘要（阶段 4.4）；摘要不含任何 Key / Cookie 片段
-    last_checked_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     last_error: Mapped[str] = mapped_column(String(200), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -218,9 +212,7 @@ class PlatformCredentialRow(Base):
 
     __tablename__ = "platform_credentials"
     __table_args__ = (
-        UniqueConstraint(
-            "user_id", "platform", name="uq_platform_credential_user_platform"
-        ),
+        UniqueConstraint("user_id", "platform", name="uq_platform_credential_user_platform"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -236,9 +228,7 @@ class PlatformCredentialRow(Base):
     hint: Mapped[str] = mapped_column(String(64), default="")
     status: Mapped[str] = mapped_column(String(16), default=CREDENTIAL_ACTIVE)
     #: 最近一次健康检查时间与失败摘要（阶段 4.4）；摘要不含任何 Key / Cookie 片段
-    last_checked_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     last_error: Mapped[str] = mapped_column(String(200), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -314,6 +304,7 @@ class TodoRow(Base):
     def __repr__(self) -> str:
         return f"<TodoRow id={self.id!r} title={self.title!r} done={self.done!r}>"
 
+
 class DocRow(Base):
     """文档助手主表：保存可编辑的 Markdown 文档与素材来源。"""
 
@@ -335,6 +326,67 @@ class DocRow(Base):
 
     def __repr__(self) -> str:
         return f"<DocRow id={self.id!r} title={self.title!r}>"
+
+
+class MediaItemRow(Base):
+    """媒体工坊素材：原文件元数据、探测结果与受控存储路径。"""
+
+    __tablename__ = "media_items"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, default=None
+    )
+    title: Mapped[str] = mapped_column(String(240), default="未命名媒体")
+    filename: Mapped[str] = mapped_column(String(255))
+    media_type: Mapped[str] = mapped_column(String(16), index=True)
+    mime_type: Mapped[str] = mapped_column(String(120), default="application/octet-stream")
+    extension: Mapped[str] = mapped_column(String(16), default="")
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    sha256: Mapped[str] = mapped_column(String(64), default="")
+    duration_ms: Mapped[int | None] = mapped_column(Integer, default=None)
+    width: Mapped[int | None] = mapped_column(Integer, default=None)
+    height: Mapped[int | None] = mapped_column(Integer, default=None)
+    video_codec: Mapped[str | None] = mapped_column(String(64), default=None)
+    audio_codec: Mapped[str | None] = mapped_column(String(64), default=None)
+    status: Mapped[str] = mapped_column(String(20), default="ready", index=True)
+    error: Mapped[str] = mapped_column(Text, default="")
+    storage_path: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, index=True
+    )
+
+    def __repr__(self) -> str:
+        return f"<MediaItemRow id={self.id!r} type={self.media_type!r}>"
+
+
+class MediaArtifactRow(Base):
+    """媒体产物：转码、抽音轨、裁剪、字幕或封面。"""
+
+    __tablename__ = "media_artifacts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    media_id: Mapped[str] = mapped_column(
+        ForeignKey("media_items.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, default=None
+    )
+    kind: Mapped[str] = mapped_column(String(24), index=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    mime_type: Mapped[str] = mapped_column(String(120), default="application/octet-stream")
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    storage_path: Mapped[str] = mapped_column(Text)
+    task_id: Mapped[str | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="SET NULL"), index=True, default=None
+    )
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    def __repr__(self) -> str:
+        return f"<MediaArtifactRow id={self.id!r} kind={self.kind!r}>"
+
 
 class KnowledgeLibraryRow(Base):
     """知识库资料库：按项目或主题组织资料。"""

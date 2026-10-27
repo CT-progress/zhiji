@@ -44,6 +44,7 @@ graph LR
 - **笔记与待办**：笔记 CRUD、标签、置顶、自动保存；待办优先级、截止日期与关联笔记
 - **本地知识库**：资料库 / 文本导入 / 原文阅读 / 混合检索 / 引用片段 / SSE 资料问答
 - **文档助手**：单文档 CRUD / 自动保存 / 笔记与知识库取材 / SSE 总结问答续写润色 / Markdown 导出
+- **媒体工坊**：图片 / 音视频上传预览 / 搜索重命名 / 异步抽音轨、MP4 转码、片段裁剪 / 可选 Whisper 字幕 / 产物下载
 - **异步任务闭环**：提交即返回 taskId，后台执行，可查询状态、取消、失败重试
 - **多用户隔离**：注册 / 登录 / 登出，数据按用户严格隔离
 - **凭据安全**：LLM Key 与平台 Cookie 全部 AES-256-GCM 加密入库，界面只显示掩码
@@ -101,6 +102,7 @@ zhiji web                # 启动 Web 服务 (http://127.0.0.1:8000)
 4. 进入「笔记与待办」管理本地笔记、标签和关联待办
 5. 进入「知识库」新建资料库并导入 TXT / Markdown / CSV / JSON / HTML，随后可阅读、检索和基于资料问答
 6. 进入「文档助手」新建空白稿纸或从笔记 / 知识库取材，正文会自动保存；可调用 AI 总结、问答、续写和润色，结果由你决定插入、替换或复制，并可导出 Markdown / 纯文本
+7. 进入「媒体工坊」上传图片、音频或视频；可异步提取音轨、转码 MP4、裁剪片段，并在安装 `asr` 可选依赖后生成 SRT 字幕。媒体处理使用内置 PyAV，不依赖系统 FFmpeg
 
 ### CLI 方式
 
@@ -118,6 +120,7 @@ zhiji config-show              # 查看当前设置
 src/zhiji/                     # Python 数据面
 ├── cli.py                     # CLI 入口 (typer)
 ├── pipeline.py                # 抓取 → 转写 → 生成 → 落盘 流水线
+├── media_service.py           # ⑤ PyAV 探测 / 转码 / 裁剪 / 字幕产物
 ├── platforms/                 # 平台适配器 + Cookie 持久化
 ├── transcription/             # faster-whisper 转写引擎
 ├── writers/                   # Markdown 笔记落盘 (幂等 upsert)
@@ -129,7 +132,7 @@ src/zhiji/                     # Python 数据面
 
 frontend/                      # Vue 3 工作台源码
 ├── src/components/           # 外壳、首页、Dock、设置等通用组件
-├── src/workspaces/           # 视频 / 笔记待办 / 知识库 / 文档助手工作区
+├── src/workspaces/           # 视频 / 笔记待办 / 知识库 / 文档助手 / 媒体工坊
 ├── src/stores/               # auth / core / ui 状态
 ├── src/lib/                  # API 与 Markdown 渲染
 ├── src/style.css             # 设计 token 与工作台样式
@@ -206,7 +209,7 @@ CI（GitHub Actions）在 Ubuntu 与 Windows 上跑 ruff、mypy、pytest 三件�
 - [ ] 阶段 C③：PDF / Office 解析，知记笔记自动入库
 - [x] 阶段 C④（MVP）：文档助手 CRUD、自动保存、笔记 / 知识库取材、流式协作与 Markdown 导出
 - [ ] 阶段 C④：批处理、复杂格式转换、`doc_jobs` 异步任务
-- [ ] 阶段 C⑤：媒体工坊
+- [x] 阶段 C⑤（MVP）：媒体工坊上传预览、PyAV 异步处理、任务与产物闭环；字幕依赖可选 `asr` 额外依赖
 - [ ] 工程化收尾：Docker 镜像内置 Vue 构建产物
 
 ### 平台能力

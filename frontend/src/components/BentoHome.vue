@@ -14,6 +14,7 @@ const noteCount = computed(() => core.conversations.filter((c) => c.has_note).le
 const noteStats = ref({ notes: 0, todos: 0 })
 const knowledgeStats = ref({ libraries: 0, documents: 0, chunks: 0, characters: 0 })
 const docStats = ref({ documents: 0, characters: 0, updated_today: 0, sources: 0 })
+const mediaStats = ref({ items: 0, images: 0, audio: 0, videos: 0, artifacts: 0, bytes: 0 })
 
 async function loadWorkspaceStats() {
   const results = await Promise.allSettled([
@@ -21,6 +22,7 @@ async function loadWorkspaceStats() {
     api('/api/todos?done=false'),
     api('/api/knowledge/stats'),
     api('/api/docs/stats'),
+    api('/api/media/stats'),
   ])
   if (results[0].status === 'fulfilled') {
     noteStats.value.notes = (results[0].value.notes || []).length
@@ -34,6 +36,9 @@ async function loadWorkspaceStats() {
   if (results[3].status === 'fulfilled') {
     docStats.value = results[3].value.stats || docStats.value
   }
+  if (results[4].status === 'fulfilled') {
+    mediaStats.value = results[4].value.stats || mediaStats.value
+  }
 }
 
 onMounted(loadWorkspaceStats)
@@ -43,7 +48,7 @@ const tiles = [
   { key: 'notes', label: '笔记与待办', sub: '独立笔记 · 待办流 · 本地自动保存', icon: NotebookPen, area: 'notes', live: true },
   { key: 'knowledge', label: '知识库', sub: '文件 · 全文检索 · 资料问答', icon: Library, area: 'knowledge', live: true },
   { key: 'docs', label: '文档助手', sub: '取材 · 写作 · 流式协作 · 导出', icon: FileText, area: 'docs', live: true },
-  { key: 'media', label: '媒体工坊', sub: '字幕 · FFmpeg · 异步导出', icon: Film, area: 'media', soon: ['Whisper', '字幕', '转码', '导出'] },
+  { key: 'media', label: '媒体工坊', sub: '素材库 · 预览 · PyAV 异步处理', icon: Film, area: 'media', live: true },
 ]
 </script>
 <template>
@@ -95,11 +100,13 @@ const tiles = [
         <div class="live-cta">{{ docStats.documents ? '继续写作与协作' : '打开第一张写作台' }} <ArrowRight :size="14" /></div>
       </div>
 
-      <div v-else class="tile-body soon-body">
-        <div class="soon-chips">
-          <span v-for="s in t.soon" :key="s" class="soon-chip">{{ s }}</span>
+      <div v-else-if="t.key === 'media'" class="tile-body live media-live">
+        <div class="live-stat"><span class="ls-num">{{ mediaStats.items }}</span><span class="ls-lab">个素材</span><span class="ls-num">{{ mediaStats.artifacts }}</span><span class="ls-lab">件产物</span></div>
+        <div class="knowledge-index-line">
+          <span>{{ mediaStats.images }} 图片 · {{ mediaStats.audio }} 音频 · {{ mediaStats.videos }} 视频</span>
+          <span>{{ new Intl.NumberFormat('zh-CN').format(mediaStats.bytes) }} B</span>
         </div>
-        <div class="soon-tag">阶段 C · 即将到来</div>
+        <div class="live-cta">{{ mediaStats.items ? '打开处理轨道' : '上传第一份媒体素材' }} <ArrowRight :size="14" /></div>
       </div>
     </button>
   </div>

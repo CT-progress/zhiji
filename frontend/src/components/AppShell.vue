@@ -8,7 +8,7 @@ import VideoWorkspace from '../workspaces/VideoWorkspace.vue'
 import NotesWorkspace from '../workspaces/NotesWorkspace.vue'
 import KnowledgeWorkspace from '../workspaces/KnowledgeWorkspace.vue'
 import DocsWorkspace from '../workspaces/DocsWorkspace.vue'
-import FocusPlaceholder from '../workspaces/FocusPlaceholder.vue'
+import MediaWorkspace from '../workspaces/MediaWorkspace.vue'
 import SettingsPage from '../settings/SettingsPage.vue'
 
 const ui = useUiStore()
@@ -24,9 +24,6 @@ function onKey(e) {
 onMounted(() => window.addEventListener('keydown', onKey))
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
-const soonFeatures = {
-  media: ['Whisper 字幕', 'FFmpeg 转码', '异步导出'],
-}
 </script>
 <template>
   <div class="shell">
@@ -43,7 +40,7 @@ const soonFeatures = {
         <NotesWorkspace v-else-if="ui.focus === 'notes'" />
         <KnowledgeWorkspace v-else-if="ui.focus === 'knowledge'" />
         <DocsWorkspace v-else-if="ui.focus === 'docs'" />
-        <FocusPlaceholder v-else-if="ui.focus === 'media'" label="媒体工坊" sub="上传预览 · Whisper 字幕 · FFmpeg · 异步导出" :features="soonFeatures.media" />
+        <MediaWorkspace v-else-if="ui.focus === 'media'" />
       </div>
     </main>
 

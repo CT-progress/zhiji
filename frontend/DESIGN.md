@@ -6,6 +6,11 @@
 
 This is not a landing page or marketing page. It is a daily-use operational tool for a solo knowledge worker. High information density but organized. Built for scanning, comparing, repeated action.
 
+**Delivery scope:** Phase C is a desktop web workbench. A native mobile app and a
+mobile-specific feature set are not deliverables. Existing narrow-window
+fallbacks keep the interface usable when a desktop browser window is resized,
+but they are not acceptance targets.
+
 ## Design Dials
 
 - Audience: personal knowledge worker (single-user local tool)
@@ -94,7 +99,7 @@ Replaced the generic 3-column icon-rail + sidebar + main shell with a **bento ho
 - **`.shell`** — full-height flex column (`shell-top` brand bar + `shell-main` content area).
 - **`.shell-top`** — 52px brand bar: logo + health + user (home only, hidden in focus mode).
 - **`.bento`** — CSS grid, 4 columns × 2 rows, grid-template-areas:
-  `"video notes knowledge" / "video docs media"`. The video tile spans 2 rows; video, notes, knowledge and docs are live tiles with real stats or activity; media remains the only "soon" tile.
+  `"video notes knowledge" / "video docs media"`. The video tile spans 2 rows; all five tiles are live and surface real stats or recent activity.
 - **`.bento-tile`** — bordered panel tile, hover = accent border + surface bg, active press = slight scale.
 
 ### Navigation: Dot Dock
@@ -141,9 +146,9 @@ Replaced the generic 3-column icon-rail + sidebar + main shell with a **bento ho
 
 ## Component Inventory
 
-- **Bento tile**: bordered panel, icon + label + sub + body (live stats or upcoming chips), hover = accent border
+- **Bento tile**: bordered panel, icon + label + sub + body (live stats or recent activity), hover = accent border
 - **Dock button**: pill icon button, label expands on hover/active, active = accent-soft bg
-- **Focus placeholder**: centered card for "coming soon" workspaces, back button + feature chips
+- **Workspace focus stage**: full-viewport workspace surface with a consistent back action and dock access
 - **Conversation drawer**: off-canvas left panel, brand + new-chat + search + conv-list + model mini
 - **Workspace topbar**: back button + drawer toggle + title + model select
 - **Platform card**: grid card, border + surface bg, active = accent border + accent-soft bg
@@ -258,4 +263,57 @@ Playwright + Edge（1280×800 / 390×844）截图验收，均通过：
 - **浏览器闭环**：新建空白文档、标题 / 正文输入、700ms 自动保存、`Ctrl+S`、刷新后读回、从笔记取材、AI 总结、插入光标、复制结果和 Markdown 附件下载均通过。
 - **首页入口**：文档瓦片已从 soon 状态切换为真实统计入口，显示文档数、取材数、字符数与今日更新数。
 - **响应式布局**：窄屏下三页签 `文档 / 编辑 / AI` 均可用，无横向溢出；桌面实现登记册 / 纸面 / 协作轨三栏结构。
+- **服务**：最新代码由 FastAPI 在 `http://127.0.0.1:8000` 托管。
+
+---
+
+## Workspace 05: Media Workbench (Phase C)
+
+### Desktop: index / preview / processing track
+- **Media library (`272px`)** — type filters, quick search, source rows with
+  thumbnail or format glyph, media metadata, upload entry and two-step deletion.
+  The rail remains an index rather than a gallery of cards.
+- **Preview canvas (`minmax(0, 1fr)`)** — a dark inspection stage for image,
+  audio and video sources, with dimensions/duration/codec metadata, inline
+  rename, replace, download and direct processing entry points.
+- **Processing and artifacts rail (`340px`)** — numbered actions for audio
+  extraction, MP4 transcode, trim and optional subtitle generation; live task
+  progress with cancellation; artifact preview/download; task history.
+- Processing actions disable themselves when the selected media type cannot
+  support the operation, and expose the reason instead of failing after submit.
+- Drag-and-drop and the upload panel support single-file image, audio and video
+  ingestion, with progress, duplicate-safe storage names and a 512 MiB limit.
+
+### Interaction contract
+- Selecting a media row updates the center stage without navigating away.
+  `Ctrl/Cmd+K` keeps the workspace shortcut slot available for command search;
+  `/` focuses library search when focus is outside an input.
+- Trim uses explicit start/end seconds and validates them against the probed
+  duration. Transcode produces H.264/AAC MP4. Audio extraction produces MP3.
+- Long-running work is submitted to the shared task queue and polled without
+  blocking the rest of the workbench. Failed tasks preserve a readable error in
+  history and do not leave phantom artifacts in the rail.
+- Source and artifact URLs are user-scoped. Preview and download responses use
+  inline/attachment dispositions with UTF-8 filenames.
+
+### Data and processing boundary
+- Tables: `media_items` and `media_artifacts`; asynchronous jobs reuse the
+  existing `tasks` table rather than introducing a parallel job system.
+- Files live under `data/media/<scope>/<media-id>/`. Metadata records the
+  original name, media type, MIME type, size, checksum and probe result.
+- PyAV performs probing, audio extraction, MP4 transcode and trimming in
+  process. No system FFmpeg executable is required. Optional `asr` dependencies
+  enable faster-whisper subtitle generation.
+- Current boundary: single-file source processing. Timeline editing, multi-track
+  composition and batch queues are intentionally deferred.
+
+## C5 验收记录（2026-10-27 · 工作区⑤ 媒体工坊）
+
+- **交付范围**：以桌面 Web 工作台三栏闭环为准；窄屏切换仅作为浏览器窗口缩窄时的兜底，不属于本阶段验收项。
+- **后端测试**：媒体 API 与处理服务 `11 passed`；全仓测试 `424 passed, 1 skipped`。
+- **静态检查**：`ruff check src tests` 通过。
+- **前端构建**：`npm run build` 通过，1589 modules transformed，CSS 132.48 kB，JS 237.23 kB。
+- **媒体闭环**：图片/音频/视频上传与预览、音轨提取、MP4 转码、视频裁剪、任务进度与取消、产物播放/下载、历史记录与能力置灰均已验证。
+- **数据隔离**：素材、产物、任务与文件路径均按用户作用域隔离；删除素材会级联清理产物记录和存储目录。
+- **清理结果**：本轮 3 个测试素材与 3 个测试产物已删除，临时 `.media-smoke` 文件已移除，媒体统计恢复为空。
 - **服务**：最新代码由 FastAPI 在 `http://127.0.0.1:8000` 托管。

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from zhiji.storage.config_repository import ConfigRepository
 from zhiji.storage.credential_repository import CredentialRepository
-from zhiji.storage.doc_repository import DocRepository
 from zhiji.storage.db import (
     DEFAULT_DB_RELATIVE,
     Database,
@@ -14,7 +13,9 @@ from zhiji.storage.db import (
     lock_for_key,
     reset_database,
 )
+from zhiji.storage.doc_repository import DocRepository
 from zhiji.storage.knowledge_repository import KnowledgeRepository
+from zhiji.storage.media_repository import MediaRepository
 from zhiji.storage.note_repository import NoteRepository, TodoRepository
 from zhiji.storage.platform_credential_repository import PlatformCredentialRepository
 from zhiji.storage.repository import TERMINAL_STATUSES, TaskRepository
@@ -33,6 +34,8 @@ from zhiji.storage.tables import (
     KnowledgeDocumentRow,
     KnowledgeLibraryRow,
     LLMCredentialRow,
+    MediaArtifactRow,
+    MediaItemRow,
     ModelConfigRow,
     NoteRow,
     PlatformCredentialRow,
@@ -64,6 +67,9 @@ __all__ = [
     "KnowledgeLibraryRow",
     "KnowledgeRepository",
     "LLMCredentialRow",
+    "MediaArtifactRow",
+    "MediaItemRow",
+    "MediaRepository",
     "ModelConfigRow",
     "NoteRepository",
     "NoteRow",

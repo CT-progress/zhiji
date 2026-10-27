@@ -10,16 +10,16 @@
 from __future__ import annotations
 
 import json
-import threading
-from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
+from zhiji.errors import GenerationCancelledError
 from zhiji.worker.api import create_worker_app, set_service
 from zhiji.worker.callback import CallbackClient
-from zhiji.errors import GenerationCancelledError
 from zhiji.worker.models import TaskDispatch, TaskEventType
 from zhiji.worker.service import WorkerService
 from zhiji.worker.trace import (
@@ -27,9 +27,7 @@ from zhiji.worker.trace import (
     generate_trace_id,
     get_trace_id,
     propagate_trace_id,
-    set_trace_id,
 )
-
 
 # ---------------------------------------------------------------------------
 # Worker API 方向（控制面 → worker）
@@ -359,9 +357,7 @@ class TestContractSchema:
     def test_task_dispatch_has_required_fields(self):
         """TaskDispatch 模型必填字段与 OpenAPI 定义一致。"""
 
-        import pytest
-
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             TaskDispatch()  # 缺所有必填字段
 
     def test_task_event_enum_matches_contract(self):
