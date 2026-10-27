@@ -1,50 +1,53 @@
 <script setup>
-import { useAuthStore } from '../stores/auth.js'
-import { useCoreStore } from '../stores/core.js'
+import { onMounted, onBeforeUnmount } from 'vue'
 import { useUiStore } from '../stores/ui.js'
-import { Video, NotebookPen, Library, FileText, Film, Settings, LogOut, UserRound } from 'lucide-vue-next'
+import { useAuthStore } from '../stores/auth.js'
+import BentoHome from './BentoHome.vue'
+import DotDock from './DotDock.vue'
 import VideoWorkspace from '../workspaces/VideoWorkspace.vue'
-import Placeholder from '../workspaces/Placeholder.vue'
+import FocusPlaceholder from '../workspaces/FocusPlaceholder.vue'
 import SettingsPage from '../settings/SettingsPage.vue'
 
-const auth = useAuthStore()
-const core = useCoreStore()
 const ui = useUiStore()
+const auth = useAuthStore()
 
-const WORKSPACES = [
-  { key: 'video', label: '视频解析', icon: Video },
-  { key: 'notes', label: '笔记与待办', icon: NotebookPen },
-  { key: 'knowledge', label: '知识库', icon: Library },
-  { key: 'docs', label: '文档助手', icon: FileText },
-  { key: 'media', label: '媒体工坊', icon: Film },
-]
+function onKey(e) {
+  if (e.key === 'Escape' && ui.focus && !ui.settingsOpen) ui.goHome()
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault()
+    if (ui.focus === 'video') ui.toggleDrawer()
+  }
+}
+onMounted(() => window.addEventListener('keydown', onKey))
+onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
+
+const soonFeatures = {
+  notes: ['笔记', '待办', '提醒', '习惯打卡'],
+  knowledge: ['上传', '解析', '全文检索', '向量问答'],
+  docs: ['总结', '问答', '生成', '润色', '导出'],
+  media: ['Whisper 字幕', 'FFmpeg 转码', '异步导出'],
+}
 </script>
 <template>
-  <div class="app">
-    <aside class="rail">
-      <div class="rail-brand">知</div>
-      <button v-for="w in WORKSPACES" :key="w.key" class="rail-btn" :class="{ active: ui.workspace === w.key }" type="button" @click="ui.setWorkspace(w.key)">
-        <component :is="w.icon" :size="20" />
-        <span class="rail-tip">{{ w.label }}</span>
-      </button>
-      <div class="rail-foot">
-        <button class="rail-btn" type="button" @click="ui.openSettings('models')" title="设置">
-          <Settings :size="20" />
-          <span class="rail-tip">设置</span>
-        </button>
-        <button v-if="auth.currentUser" class="rail-btn" type="button" @click="auth.logout()" title="退出">
-          <LogOut :size="20" />
-          <span class="rail-tip">退出</span>
-        </button>
+  <div class="shell">
+    <header v-if="!ui.focus" class="shell-top">
+      <div class="shell-brand"><span class="brand-mark">知</span><span class="brand-name">知记 zhiji</span></div>
+      <div class="shell-health">{{ auth.health }}</div>
+      <div class="shell-top-right" v-if="auth.currentUser"><span>{{ auth.currentUser.username }}</span></div>
+    </header>
+
+    <main class="shell-main">
+      <BentoHome v-if="!ui.focus" />
+      <div v-else class="focus-stage">
+        <VideoWorkspace v-if="ui.focus === 'video'" />
+        <FocusPlaceholder v-else-if="ui.focus === 'notes'" label="笔记与待办" sub="notes · todos · reminders · 习惯打卡" :features="soonFeatures.notes" />
+        <FocusPlaceholder v-else-if="ui.focus === 'knowledge'" label="知识库" sub="文件 · 解析 · 全文 + 向量检索 · 资料问答" :features="soonFeatures.knowledge" />
+        <FocusPlaceholder v-else-if="ui.focus === 'docs'" label="文档助手" sub="总结 · 问答 · 生成 · 润色 · 批处理 · 转换导出" :features="soonFeatures.docs" />
+        <FocusPlaceholder v-else-if="ui.focus === 'media'" label="媒体工坊" sub="上传预览 · Whisper 字幕 · FFmpeg · 异步导出" :features="soonFeatures.media" />
       </div>
-    </aside>
-    <div class="workspace">
-      <VideoWorkspace v-if="ui.workspace === 'video'" />
-      <Placeholder v-else-if="ui.workspace === 'notes'" title="笔记与待办" />
-      <Placeholder v-else-if="ui.workspace === 'knowledge'" title="知识库" />
-      <Placeholder v-else-if="ui.workspace === 'docs'" title="文档助手" />
-      <Placeholder v-else-if="ui.workspace === 'media'" title="媒体工坊" />
-    </div>
+    </main>
+
+    <DotDock />
+    <SettingsPage v-if="ui.settingsOpen" />
   </div>
-  <SettingsPage v-if="ui.settingsOpen" />
 </template>

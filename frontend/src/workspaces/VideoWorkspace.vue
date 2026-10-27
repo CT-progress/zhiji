@@ -6,7 +6,7 @@ import { useAuthStore } from '../stores/auth.js'
 import { api, streamSSE, streamGetSSE } from '../lib/api.js'
 import { renderMarkdown, stripFrontmatter } from '../lib/markdown.js'
 import ModelSelect from '../components/ModelSelect.vue'
-import { Plus, Search, Menu, Copy, Download, ExternalLink, Check, Pencil, Trash2, ArrowUp } from 'lucide-vue-next'
+import { Plus, Search, Menu, Copy, Download, ExternalLink, Check, Pencil, Trash2, ArrowUp, ArrowLeft } from 'lucide-vue-next'
 
 const core = useCoreStore()
 const ui = useUiStore()
@@ -65,7 +65,7 @@ function showHome() {
   note.value = null
   genSteps.value = []
   generating.value = false
-  ui.sidebarOpen = false
+  ui.drawerOpen = false
 }
 
 const convTitle = computed(() => {
@@ -236,7 +236,7 @@ async function openConversation(id) {
       : null
     genSteps.value = []
     genError.value = null
-    ui.sidebarOpen = false
+    ui.drawerOpen = false
     scrollToBottom()
   } catch (err) { toast(err.message) }
 }
@@ -308,8 +308,8 @@ onMounted(() => { restoreActiveTask().catch(() => {}) })
 </script>
 
 <template>
-  <div class="app">
-    <aside class="sidebar" :class="{ open: ui.sidebarOpen }">
+  <div class="ws">
+    <aside class="conv-drawer" :class="{ open: ui.drawerOpen }">
       <div class="brand">
         <div class="brand-mark">知</div>
         <div>
@@ -333,16 +333,18 @@ onMounted(() => { restoreActiveTask().catch(() => {}) })
           </span>
         </div>
       </nav>
-      <div class="sidebar-foot">
+      <div class="drawer-foot">
         <div class="user-mini" v-if="auth.currentUser"><span>{{ auth.currentUser.username }}</span></div>
         <div class="model-mini"><span>{{ core.model || '未配置模型' }}</span></div>
       </div>
     </aside>
 
-    <main class="main">
-      <header class="topbar">
-        <button class="icon-btn menu-btn" type="button" aria-label="打开会话列表" @click="ui.toggleSidebar()"><Menu :size="20" /></button>
-        <div style="min-width:0">
+    <div class="drawer-scrim" v-if="ui.drawerOpen" @click="ui.drawerOpen = false"></div>
+    <main class="ws-main">
+      <header class="ws-topbar">
+        <button class="icon-btn" type="button" aria-label="返回首页" @click="ui.goHome()"><ArrowLeft :size="18" /></button>
+        <button class="icon-btn" type="button" aria-label="会话列表 (Ctrl+K)" @click="ui.toggleDrawer()"><Menu :size="18" /></button>
+        <div class="ws-title" style="min-width:0">
           <h1>{{ generating ? '正在生成笔记' : convTitle }}</h1>
           <div class="top-meta">{{ convMeta }}</div>
         </div>

@@ -81,34 +81,68 @@ All radii capped at 8px. No 12px/14px/16px rounded cards.
 
 | Token | Value |
 |---|---|
-| --rail-w    | 60px |
-| --content-max| 820px |
-| --topbar-h  | 52px |
+| --content-max | 820px |
+| --topbar-h   | 52px |
+| --drawer-w   | 280px |
+| --dock-h     | 56px |
+
+## Shell Architecture (Phase B · Direction 1)
+
+Replaced the generic 3-column icon-rail + sidebar + main shell with a **bento home + dot dock + focus mode + slide-out drawer** layout.
+
+### Home: Bento Grid
+- **`.shell`** — full-height flex column (`shell-top` brand bar + `shell-main` content area).
+- **`.shell-top`** — 52px brand bar: logo + health + user (home only, hidden in focus mode).
+- **`.bento`** — CSS grid, 4 columns × 2 rows, grid-template-areas:
+  `"video notes knowledge" / "video docs media"`. The video tile spans 2 rows (live workspace); the other 4 are "soon" tiles with feature chips.
+- **`.bento-tile`** — bordered panel tile, hover = accent border + surface bg, active press = slight scale.
+
+### Navigation: Dot Dock
+- **`.dock`** — bottom-center floating pill (`position:absolute; border-radius:999px`), always visible.
+- **`.dock-btn`** — icon button, labels (`.dock-label`) expand on hover/active via `max-width` transition.
+- Home button + 5 workspace dots + settings + logout, separated by `.dock-sep` dividers.
+
+### Focus Mode
+- Clicking a bento tile sets `ui.focus` to the workspace key; `shell-top` hides, workspace fills `.focus-stage` (absolute inset:0).
+- **ESC** → `ui.goHome()` returns to bento.
+- **Ctrl+K** → toggles conversation drawer (video workspace only).
+
+### Conversation Drawer
+- **`.conv-drawer`** — off-canvas left drawer (`position:absolute; transform:translateX(-100%)`), slides in with `.open` class.
+- **`.drawer-scrim`** — semi-transparent overlay, click to close.
+- Contains brand header, new-chat button, search, conversation list, model mini.
 
 ## Component Inventory
 
-- **Rail button**: 40x40 icon button, active = accent-soft bg + accent color, hover tooltip right
-- **Sidebar item**: conversation row, hover/active = surface bg, title ellipsis
+- **Bento tile**: bordered panel, icon + label + sub + body (live stats or soon chips), hover = accent border
+- **Dock button**: pill icon button, label expands on hover/active, active = accent-soft bg
+- **Focus placeholder**: centered card for "coming soon" workspaces, back button + feature chips
+- **Conversation drawer**: off-canvas left panel, brand + new-chat + search + conv-list + model mini
+- **Workspace topbar**: back button + drawer toggle + title + model select
 - **Platform card**: grid card, border + surface bg, active = accent border + accent-soft bg
 - **Note card**: bordered surface, panel header bar, markdown body, muted path footer
 - **Message**: avatar + bubble, user right-aligned surface-2, assistant full-width
 - **Composer**: input border container + accent send button, focus = accent border
 - **Form field**: label + input, focus = accent border
-- **Settings nav**: left rail of icon+label items, active = surface bg
+- **Settings nav**: left rail of icon+label items, active = surface bg (full-screen overlay)
 - **Badge**: pill, accent-soft bg + accent text, variants: info/warn/danger
 - **Toast**: bottom-center, surface-2 bg, border
 
 ---
 
-## B2 验收记录（2026-10-26）
+## B2 验收记录（2026-10-27 · Direction 1 重构）
 
-Playwright 桌面（1280×800）+ 移动（390×844）两视口截图验收，均通过：
+Playwright + Chrome（1280×800）截图验收，均通过：
 
-- **无重叠**：rail(0–60) + sidebar(60–320) + main(320–1280) 在桌面正确铺满，三栏不重叠；移动端 rail 收窄到 52px，sidebar 改为 `position:fixed` 离屏（`transform: translateX(-105%)`），仅在 `.open` 时滑入，不与主区重叠。
-- **文字不溢出**：`body.scrollWidth === body.clientWidth`，桌面 1280、移动 390，无横向滚动条。rail-btn 的 `.rail-tip` 为 `opacity:0` 绝对定位 tooltip，仅 hover 显现，不计入布局溢出（scrollWidth 检测为已知误报）。
-- **流式消息不跳布局**：`.main` 为 flex 列 = `topbar(flex:none,52px)` + `scroll-area(flex:1,overflow-y:auto)` + `composer-wrap(flex:none)`。输入框恒定锚底，流式 delta 只在 scroll-area 内增长并自动滚动，不顶动 composer。
-- **修一处布局缺陷**：VideoWorkspace 根元素复用了 `.app` 类名，作为 `.workspace` 的 flex 子项缺 `flex:1`，导致桌面端主区只占 657px、右侧留 623px 空白。补 `.workspace > .app { flex:1; min-width:0 }`，主区恢复铺满到 1280。
-- **控制台零报错**：内联 SVG favicon（`data:` URI，知字 + #10a37f）消除 `/favicon.ico` 404。
+- **Bento 首页渲染**：5 个 bento-tile 正确铺满 grid-template-areas，视频瓦片跨 2 行。shell-top 品牌栏可见。
+- **Dot dock**：7 个 dock-btn（首页 + 5 工作区 + 设置），底部居中浮动胶囊，hover 展开 label。
+- **焦点模式切换**：点击视频瓦片 → 进入 `.focus-stage` 全屏模式，ws-main + ws-topbar + conv-drawer 正确渲染。shell-top 隐藏。
+- **会话抽屉**：顶栏 Menu 按钮 / Ctrl+K → `.conv-drawer.open` 从左侧滑入，`.drawer-scrim` 遮罩点击可关闭。
+- **ESC 返回首页**：按 Escape → 回到 bento 首页，shell-top 重新可见。
+- **无横向溢出**：`body.scrollWidth === body.clientWidth`（1280 = 1280）。
+- **控制台零报错**。
 
-截图存档：`phaseB-shots/` — auth_desktop / auth_mobile / app_desktop / app_mobile / settings_desktop / app_{notes,knowledge,media}_placeholder。
+关键修复：之前 `App.vue` 导入的是 `components/AppShell.vue`（旧 rail 布局），而新 bento shell 误放在 `src/AppShell.vue`（根级，未被引用），导致 UI「跟没改一样」。已将新版覆盖到 `components/AppShell.vue` 并删除根级副本。同时 `style.css` 完全重写——移除旧 `.app`/`.rail`/`.sidebar`/`.menu-btn`/`.workspace`/`.placeholder-page` 规则，新增 `.shell`/`.shell-top`/`.bento`/`.dock`/`.focus-stage`/`.conv-drawer`/`.focus-placeholder` 等完整样式。
+
+截图存档：`shot_home.png` / `shot_video_focus.png` / `shot_drawer_open.png` / `shot_after_esc.png`。
 设计判断方法参考 design-taste-frontend 的 dial（DESIGN_VARIANCE 5 / MOTION_INTENSITY 3 / VISUAL_DENSITY 5），调性锚点见开头 North Star。
