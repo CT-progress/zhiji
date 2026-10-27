@@ -1,7 +1,7 @@
 # 知记工作台 · 技术基线
 
-> 版本：v0.2（2026-10-27） · 与 `WORKBENCH_PRODUCT.md` 配套
-> 当前进度：阶段 A/B 完成；阶段 C 的 ① 视频解析、② 笔记与待办、③ 知识库、④ 文档助手、⑤ 媒体工坊 MVP 已落地。
+> 版本：v0.3（2026-10-27） · 与 `WORKBENCH_PRODUCT.md` 配套
+> 当前进度：阶段 A/B 完成；阶段 C 的 ① 视频解析、② 笔记与待办、③ 知识库、④ 文档助手、⑤ 媒体工坊 MVP 已落地；v0.1.0 桌面 Web 发布候选验收已通过，Docker 真构建待 CI 收口。
 
 ## 技术栈
 
@@ -13,6 +13,7 @@
 | 任务队列 | **进程内 `TaskWorker`** | 媒体处理通过 `tasks` 表异步执行并可取消；知识库文本导入与文档单篇协作同步完成，批量解析和 `doc_jobs` 后续接任务队列 |
 | 前端 | **Vue 3 + Vite + Pinia** | `frontend/src/`；Bento 首页 + Dot Dock + 焦点工作区模式 |
 | 静态托管 | **FastAPI 托管 `frontend/dist/`** | 开发时 Vite `:5173` 反代 FastAPI `:8000`，生产直接由 FastAPI 提供构建产物 |
+| 构建与交付 | **Node 20 + Docker 多阶段 + GitHub Actions** | 镜像构建阶段执行 `npm ci` / `npm run build`，runtime 托管 Vue 产物；quickstart 同样自动构建前端 |
 | 图标 | **lucide-vue-next** | 全站统一线性图标 |
 | 转写 | **faster-whisper（可选 `asr` 依赖）** | 视频解析与媒体工坊字幕共用；未安装时字幕动作置灰或明确报错 |
 | 媒体处理 | **PyAV** | 进程内探测、抽音轨、转码、裁剪；随 Python 依赖安装，不调用系统 FFmpeg |
@@ -51,6 +52,18 @@ src/zhiji/
 ```
 
 工作区之间不直接互调。它们共享数据库、用户作用域、LLM 客户端与任务队列；简单 CRUD 和文本导入在请求内完成，耗时解析/媒体任务再进入 `TaskWorker`。
+
+## v0.1.0 工程化与验收基线
+
+2026-10-27 完成桌面 Web 发布候选验收，当前基线如下：
+
+- 质量门禁：Ruff 通过；mypy 检查 63 个源文件无问题；pytest 为 429 passed / 1 skipped，唯一警告来自第三方 Starlette/httpx 弃用提示。
+- 稳定性：双账号数据与文件作用域隔离 47/47；服务重启持久化 26/26；备份恢复 26/26；旧数据迁移可重复执行；全新安装首次使用闭环通过。
+- 接口与体验：API 冒烟 13/13；桌面 UI 在 1440×900、1280×800 两档视口 65/65，覆盖空状态、长列表、超长标题、横向溢出、按钮遮挡、错误 Toast 与控制台异常。
+- 发布阻塞修复：`POST /api/note/save` 在鉴权模式下只允许写入 `output/notes/{user_id}/` 或本人会话绑定文件，跨用户覆盖返回 404；文档创建时间改为作用域内单调递增，避免同一时钟刻度下排序不稳定。
+- 交付工程：前端生产构建、Docker 多阶段前端构建、quickstart 自动构建和 CI 前端 job 均已补齐；本机因没有 Docker CLI，真实镜像 build / start / health 仍由 CI Docker job 验证。
+
+完整证据见 `docs/RELEASE_ACCEPTANCE.md`。
 
 ## 当前已实现的工作区
 
