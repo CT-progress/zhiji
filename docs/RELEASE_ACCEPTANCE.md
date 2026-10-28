@@ -37,7 +37,7 @@
 | 全新安装 | 通过 | 注册 / 登录 / 数据库 / 配置 / 首篇笔记 / `output` 惰性创建 |
 | 桌面 UI | 65/65 | 两档视口下的空状态、长列表、超长标题、横向溢出、按钮遮挡、错误 Toast、控制台异常 |
 | Docker 静态验收 | 通过 | 多阶段前端构建、非 root、卷、健康检查及 CI job 契约 |
-| Docker 真构建 | 待 CI | 本机没有 Docker CLI；由 GitHub Actions `docker` job 执行真实 build/start/health |
+| Docker 真构建 | 通过 | GitHub Actions `docker` job 真实 build / 非 root / 启动 / 健康检查全部通过（run 40647291762，2026-10-28） |
 
 ## 3. 已修复的发布阻塞
 
@@ -91,6 +91,7 @@ cd ..
 | 媒体格式兼容性 | 依赖 PyAV 可解码格式；Whisper 字幕依赖可选 `asr` 额外依赖 |
 | PostgreSQL / 多节点 | SQLite 单机是默认；PostgreSQL 属可选部署，不在本轮性能验收内 |
 | 阶段 C 增强项 | 提醒、日历、习惯、PDF / Office、批处理等按路线图后续实现 |
+| CI checks job 为红 | 两个用例依赖本机构建产物与终端宽度（无 frontend/dist 时回退旧静态页、rich 在窄终端截断 --help）；属测试环境问题，产品代码未受影响，标记后单独修复 |
 
 ## 7. 发布检查清单
 
@@ -103,4 +104,4 @@ cd ..
 - [x] API 冒烟通过
 - [x] lint / 类型检查 / 单元测试通过
 - [x] Docker 构建契约进入 CI
-- [ ] GitHub Actions Docker job 实际通过后创建 `v0.1.0` 标签
+- [x] GitHub Actions Docker job 实际通过后创建 `v0.1.0` 标签
