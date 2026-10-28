@@ -38,6 +38,7 @@
 | 桌面 UI | 65/65 | 两档视口下的空状态、长列表、超长标题、横向溢出、按钮遮挡、错误 Toast、控制台异常 |
 | Docker 静态验收 | 通过 | 多阶段前端构建、非 root、卷、健康检查及 CI job 契约 |
 | Docker 真构建 | 通过 | GitHub Actions `docker` job 真实 build / 非 root / 启动 / 健康检查全部通过（run 40647291762，2026-10-28） |
+| GitHub Actions | 通过 | `checks` 在 Ubuntu / Windows × Python 3.11 / 3.12 四矩阵全绿，`frontend` 与 `docker` 同轮通过（run 40669730552，2026-10-28） |
 
 ## 3. 已修复的发布阻塞
 
@@ -50,6 +51,16 @@
 - 非法跨用户覆盖返回 404
 - 无鉴权本地模式保持原行为
 - 回归用例：`test_note_save_files_are_isolated_by_user`
+
+### CI 跨平台测试稳定性
+
+发布前最后一轮 CI 修复了三处跨平台假失败，并保留原有断言覆盖：
+
+- CLI 测试改为检查 Typer 命令注册与参数，不再依赖终端宽度导致的 Rich 渲染截断
+- 前端静态资源测试在本机无 `frontend/dist/` 时跳过；CI 的 `frontend` job 会先构建再执行该用例，确保产物存在时真实校验
+- 文本资料 MIME 使用显式扩展名映射，避免 Windows 注册表把 `.markdown` 识别成 `text/plain`
+
+最终 GitHub Actions 结果：run `40669730552`，6/6 jobs 通过。
 
 ## 4. UI 验收覆盖
 
@@ -91,7 +102,6 @@ cd ..
 | 媒体格式兼容性 | 依赖 PyAV 可解码格式；Whisper 字幕依赖可选 `asr` 额外依赖 |
 | PostgreSQL / 多节点 | SQLite 单机是默认；PostgreSQL 属可选部署，不在本轮性能验收内 |
 | 阶段 C 增强项 | 提醒、日历、习惯、PDF / Office、批处理等按路线图后续实现 |
-| CI checks job 为红 | 两个用例依赖本机构建产物与终端宽度（无 frontend/dist 时回退旧静态页、rich 在窄终端截断 --help）；属测试环境问题，产品代码未受影响，标记后单独修复 |
 
 ## 7. 发布检查清单
 
