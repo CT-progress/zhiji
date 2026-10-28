@@ -143,7 +143,7 @@ docker-compose.yml
 ## 开发
 
 ```powershell
-pytest
+pytest -n auto                 # 并行跑；串行全量在本机约 14 分钟，8 进程约 6 分钟
 ruff check src tests
 mypy
 

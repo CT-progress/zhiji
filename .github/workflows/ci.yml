@@ -37,7 +37,7 @@ jobs:
         run: mypy
 
       - name: Test (pytest)
-        run: pytest -p no:cacheprovider
+        run: pytest -p no:cacheprovider -n auto
 
   frontend:
     runs-on: ubuntu-latest
