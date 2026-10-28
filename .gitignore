@@ -30,3 +30,6 @@ control-plane/target/
 
 # Frontend
 node_modules/
+
+# Local AI assistant memory
+.workbuddy-ai/
