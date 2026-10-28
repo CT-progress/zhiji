@@ -16,7 +16,12 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from zhiji.config import ConfigManager
-from zhiji.knowledge import KnowledgeImportError, extract_document_text, split_text
+from zhiji.knowledge import (
+    TEXT_MIME_TYPES,
+    KnowledgeImportError,
+    extract_document_text,
+    split_text,
+)
 from zhiji.llm.client import LLMClient
 from zhiji.storage import Database
 from zhiji.storage.knowledge_repository import (
@@ -220,14 +225,19 @@ def create_knowledge_router(
         if not filename:
             raise HTTPException(status_code=400, detail="文件名不能为空")
         try:
-            text, _extension = extract_document_text(filename, payload.content)
+            text, extension = extract_document_text(filename, payload.content)
         except KnowledgeImportError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         chunks = split_text(text)
         if not chunks:
             raise HTTPException(status_code=400, detail="资料未能切分为可检索片段")
         title = _clean_text(payload.title or "", fallback=PurePath(filename).stem)
-        mime_type = payload.mime_type or mimetypes.guess_type(filename)[0] or "text/plain"
+        mime_type = (
+            payload.mime_type
+            or TEXT_MIME_TYPES.get(extension)
+            or mimetypes.guess_type(filename)[0]
+            or "text/plain"
+        )
         with database.session_scope() as session:
             repo = KnowledgeRepository(session)
             if repo.get_library(library_id, user_id=scope) is None:

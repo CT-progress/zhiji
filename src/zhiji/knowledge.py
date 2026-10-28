@@ -18,6 +18,15 @@ CHUNK_OVERLAP = 160
 TEXT_EXTENSIONS = frozenset(
     {".txt", ".md", ".markdown", ".csv", ".json", ".html", ".htm"}
 )
+TEXT_MIME_TYPES = {
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
+    ".csv": "text/csv",
+    ".json": "application/json",
+    ".html": "text/html",
+    ".htm": "text/html",
+}
 BINARY_EXTENSIONS = frozenset({".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"})
 
 _CJK_RE = re.compile(r"[\u3400-\u9fff]+")
