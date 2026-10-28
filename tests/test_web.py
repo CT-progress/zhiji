@@ -1,10 +1,15 @@
 import re
+from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from zhiji.config import ConfigManager
 from zhiji.llm.client import LLMClient
 from zhiji.web.app import create_app
+
+ROOT = Path(__file__).resolve().parents[1]
+FRONTEND_DIST = ROOT / "frontend" / "dist"
 
 
 def _client(tmp_path) -> tuple[TestClient, ConfigManager]:
@@ -403,7 +408,13 @@ def test_note_generate_stream(tmp_path, monkeypatch):
 
 
 def test_frontend_assets_split_from_html(tmp_path):
-    """当前 Vite 构建产物由 index + hashed css/js 组成，页面只引用外部资源。"""
+    """当前 Vite 构建产物由 index + hashed css/js 组成，页面只引用外部资源。
+
+    dist 不存在时 FastAPI 会回退到旧静态页，此时跳过而不是断言失败：CI 的
+    checks job 矩阵不构建前端，真正的校验放在 frontend job（构建后单独运行本用例）。
+    """
+    if not (FRONTEND_DIST / "index.html").is_file():
+        pytest.skip("需要先构建 frontend/dist（由 CI frontend job 覆盖）")
     client, _ = _client(tmp_path)
 
     index = client.get("/")

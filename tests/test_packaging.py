@@ -14,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
-from typer.testing import CliRunner
+from typer.main import get_command
 
 from zhiji.cli import app as cli_app
 
@@ -67,12 +67,16 @@ def test_entrypoint_defaults_to_require_auth_and_honours_env() -> None:
 
 
 def test_entrypoint_flags_exist_in_cli() -> None:
-    """入口脚本拼的参数名必须和 CLI 真实选项一致。"""
+    """入口脚本拼的参数名必须和 CLI 真实选项一致。
 
-    result = CliRunner().invoke(cli_app, ["web", "--help"])
-    assert result.exit_code == 0
+    直接查命令定义而不是渲染后的 --help 文本：rich 在窄终端会把帮助信息折行
+    截断，导致文本断言在 CI 上假失败（见 v0.1.0 后 CI checks job）。
+    """
+
+    web_command = get_command(cli_app).commands["web"]
+    opts = {opt for param in web_command.params for opt in getattr(param, "opts", ())}
     for flag in ("--host", "--port", "--token", "--require-auth"):
-        assert flag in result.output
+        assert flag in opts
 
 
 def test_dockerfile_runs_as_non_root() -> None:

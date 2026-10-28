@@ -59,6 +59,20 @@ jobs:
       - name: Build Vue workbench
         run: npm run build
 
+      # 构建产物就绪后，验证 FastAPI 真的把 dist 当作生产入口来托管，
+      # 而不是回退到旧静态页。checks job 矩阵不构建前端，故该用例在那里跳过。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        working-directory: .
+        run: pip install -e ".[dev]"
+
+      - name: Verify served Vue bundle
+        working-directory: .
+        run: pytest -p no:cacheprovider tests/test_web.py::test_frontend_assets_split_from_html
+
   # 阶段 5：容器化。真实跑一遍 docker build，并验证容器能启动、健康检查可达、
   # 进程不是 root —— 这些是本机（无 Docker）无法覆盖的部分。
   docker:
